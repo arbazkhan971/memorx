@@ -2,8 +2,6 @@ package bench
 
 import "strings"
 
-// --- Action/Query builder helpers ---
-
 type params = map[string]interface{}
 
 func startFeature(name string) Action          { return Action{Tool: "start_feature", Params: params{"name": name}} }
@@ -49,9 +47,6 @@ func searchAllTyped(query string, types []interface{}) Query {
 	return Query{Tool: "search", Params: params{"query": query, "scope": "all_features", "types": types}}
 }
 
-// --- Scenario generators for common patterns ---
-
-// factOverride generates a scenario: start feature, add facts with same subj+pred, query, expect latest only.
 func factOverride(id, feature, desc, subj, pred string, values []string, extraContains []string) Scenario {
 	setup := []Action{startFeature(feature)}
 	for _, v := range values {
@@ -68,7 +63,6 @@ func factOverride(id, feature, desc, subj, pred string, values []string, extraCo
 	return s
 }
 
-// AllScenarios returns all 70 benchmark scenarios across 7 abilities.
 func AllScenarios() []Scenario {
 	var all []Scenario
 	all = append(all, sessionContinuityScenarios()...)
@@ -81,7 +75,6 @@ func AllScenarios() []Scenario {
 	return all
 }
 
-// ScenariosByAbility returns scenarios filtered by ability name.
 func ScenariosByAbility(ability string) []Scenario {
 	var out []Scenario
 	for _, s := range AllScenarios() {
@@ -91,10 +84,6 @@ func ScenariosByAbility(ability string) []Scenario {
 	}
 	return out
 }
-
-// ---------------------------------------------------------------------------
-// Ability 1: Session Continuity (15 scenarios)
-// ---------------------------------------------------------------------------
 
 func sessionContinuityScenarios() []Scenario {
 	const a = "session_continuity"
@@ -215,9 +204,27 @@ func sessionContinuityScenarios() []Scenario {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Ability 2: Decision Recall (10 scenarios)
-// ---------------------------------------------------------------------------
+func dr009() Scenario {
+	decisions := []string{
+		"React for UI components", "Tailwind CSS for styling", "Next.js for server-side rendering",
+		"Prisma ORM for database access", "tRPC for type-safe API calls", "Zod for runtime validation",
+		"NextAuth for authentication", "Vercel for deployment", "Planetscale for managed MySQL",
+		"Upstash for serverless Redis", "Resend for transactional emails", "Sentry for error monitoring",
+		"PostHog for product analytics", "Stripe for payment processing integration",
+		"Cloudflare for CDN and DDoS protection", "GitHub Actions for CI/CD pipeline",
+		"Turborepo for monorepo management", "Playwright for end-to-end testing",
+		"Vitest for unit testing", "Storybook for component documentation",
+	}
+	setup := []Action{startFeature("dr-many")}
+	for _, d := range decisions {
+		setup = append(setup, note("Decided to use "+d, "decision"))
+	}
+	return Scenario{
+		ID: "dr-009", Ability: "decision_recall", Description: "20 decisions, search specific one — found by relevance",
+		Setup: setup, Query: searchQ("Stripe payment", "current_feature", "dr-many"),
+		ExpectedContains: []string{"Stripe", "payment"},
+	}
+}
 
 func decisionRecallScenarios() []Scenario {
 	const a = "decision_recall"
@@ -268,31 +275,7 @@ func decisionRecallScenarios() []Scenario {
 			Setup:            []Action{startFeature("dr-tradeoff"), note("Decided to use MongoDB over DynamoDB for document storage due to better query flexibility", "decision")},
 			Query:            searchQ("DynamoDB", "current_feature", "dr-tradeoff"),
 			ExpectedContains: []string{"MongoDB", "DynamoDB"}},
-		{ID: "dr-009", Ability: a, Description: "20 decisions, search specific one — found by relevance",
-			Setup: []Action{
-				startFeature("dr-many"),
-				note("Decided to use React for UI components", "decision"),
-				note("Decided to use Tailwind CSS for styling", "decision"),
-				note("Decided to use Next.js for server-side rendering", "decision"),
-				note("Decided to use Prisma ORM for database access", "decision"),
-				note("Decided to use tRPC for type-safe API calls", "decision"),
-				note("Decided to use Zod for runtime validation", "decision"),
-				note("Decided to use NextAuth for authentication", "decision"),
-				note("Decided to use Vercel for deployment", "decision"),
-				note("Decided to use Planetscale for managed MySQL", "decision"),
-				note("Decided to use Upstash for serverless Redis", "decision"),
-				note("Decided to use Resend for transactional emails", "decision"),
-				note("Decided to use Sentry for error monitoring", "decision"),
-				note("Decided to use PostHog for product analytics", "decision"),
-				note("Decided to use Stripe for payment processing integration", "decision"),
-				note("Decided to use Cloudflare for CDN and DDoS protection", "decision"),
-				note("Decided to use GitHub Actions for CI/CD pipeline", "decision"),
-				note("Decided to use Turborepo for monorepo management", "decision"),
-				note("Decided to use Playwright for end-to-end testing", "decision"),
-				note("Decided to use Vitest for unit testing", "decision"),
-				note("Decided to use Storybook for component documentation", "decision"),
-			},
-			Query: searchQ("Stripe payment", "current_feature", "dr-many"), ExpectedContains: []string{"Stripe", "payment"}},
+		dr009(),
 		{ID: "dr-010", Ability: a, Description: "Search by type filter — only matching type returned",
 			Setup: []Action{
 				startFeature("dr-typefilter"),
@@ -304,15 +287,8 @@ func decisionRecallScenarios() []Scenario {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Ability 3: Knowledge Updates / Contradiction (10 scenarios)
-// ---------------------------------------------------------------------------
-
 func knowledgeUpdateScenarios() []Scenario {
 	const a = "knowledge_updates"
-
-	// Generate fact-override scenarios from table: start feature, add sequential
-	// facts with same subject+predicate, query, expect only the latest is active.
 	overrides := []struct {
 		id, feature, desc, subj, pred string
 		values                        []string
@@ -323,7 +299,6 @@ func knowledgeUpdateScenarios() []Scenario {
 		{"ku-005", "ku-temporal", "Facts at different times — latest active", "api_version", "is", []string{"v1", "v2"}},
 		{"ku-010", "ku-rapid", "Rapid succession of 5 updates — only latest survives", "port", "is", []string{"3000", "8080", "8443", "9090", "4000"}},
 	}
-	// ku-005 has a special ExpectedNotContain format ("api_version is v1" not just "v1").
 	scenarios := make([]Scenario, 0, 10)
 	for _, o := range overrides {
 		s := factOverride(o.id, o.feature, o.desc, o.subj, o.pred, o.values, nil)
@@ -333,7 +308,6 @@ func knowledgeUpdateScenarios() []Scenario {
 		scenarios = append(scenarios, s)
 	}
 
-	// Remaining hand-crafted scenarios.
 	scenarios = append(scenarios,
 		Scenario{ID: "ku-003", Ability: a, Description: "Identical fact twice — no duplicate",
 			Setup:            []Action{startFeature("ku-duplicate"), fact("framework", "is", "Django"), fact("framework", "is", "Django")},
@@ -361,10 +335,6 @@ func knowledgeUpdateScenarios() []Scenario {
 	)
 	return scenarios
 }
-
-// ---------------------------------------------------------------------------
-// Ability 4: Temporal Reasoning (10 scenarios)
-// ---------------------------------------------------------------------------
 
 func temporalReasoningScenarios() []Scenario {
 	const a = "temporal_reasoning"
@@ -442,10 +412,6 @@ func temporalReasoningScenarios() []Scenario {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Ability 5: Cross-Feature Reasoning (8 scenarios)
-// ---------------------------------------------------------------------------
-
 func crossFeatureScenarios() []Scenario {
 	const a = "cross_feature"
 	return []Scenario{
@@ -506,10 +472,6 @@ func crossFeatureScenarios() []Scenario {
 			ExpectedNotContain: []string{"RADARFOX"}},
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Ability 6: Plan Tracking (10 scenarios)
-// ---------------------------------------------------------------------------
 
 func planTrackingScenarios() []Scenario {
 	const a = "plan_tracking"
@@ -581,10 +543,6 @@ func planTrackingScenarios() []Scenario {
 			Query: ctxQuery("pt-empty-plan", "standard"), ExpectedContains: []string{"pt-empty-plan"}},
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Ability 7: Abstention (7 scenarios)
-// ---------------------------------------------------------------------------
 
 func abstentionScenarios() []Scenario {
 	const a = "abstention"

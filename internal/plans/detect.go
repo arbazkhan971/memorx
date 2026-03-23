@@ -38,7 +38,6 @@ func (m *Manager) MatchCommitToSteps(commitMessage, featureID string) (*PlanStep
 	if err != nil {
 		return nil, fmt.Errorf("get plan steps: %w", err)
 	}
-
 	commitWords := tokenize(commitMessage)
 	if len(commitWords) == 0 {
 		return nil, nil
@@ -46,18 +45,17 @@ func (m *Manager) MatchCommitToSteps(commitMessage, featureID string) (*PlanStep
 	var bestStep *PlanStep
 	bestScore := 0.0
 	for i := range steps {
-		s := &steps[i]
-		if s.Status == "completed" || s.Status == "skipped" {
+		if steps[i].Status == "completed" || steps[i].Status == "skipped" {
 			continue
 		}
-		score := jaccard(commitWords, tokenize(s.Title))
-		if s.Description != "" {
-			if ds := jaccard(commitWords, tokenize(s.Description)); ds > score {
+		score := jaccard(commitWords, tokenize(steps[i].Title))
+		if steps[i].Description != "" {
+			if ds := jaccard(commitWords, tokenize(steps[i].Description)); ds > score {
 				score = ds
 			}
 		}
 		if score > bestScore {
-			bestScore, bestStep = score, s
+			bestScore, bestStep = score, &steps[i]
 		}
 	}
 	if bestScore < matchThreshold {

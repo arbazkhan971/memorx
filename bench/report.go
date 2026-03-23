@@ -7,7 +7,6 @@ import (
 	"strings"
 )
 
-// Report aggregates all results into a score card.
 type Report struct {
 	TotalScenarios  int                      `json:"total_scenarios"`
 	TotalPassed     int                      `json:"total_passed"`
@@ -19,7 +18,6 @@ type Report struct {
 	Failures        []FailureDetail          `json:"failures,omitempty"`
 }
 
-// AbilityReport holds aggregated metrics for a single ability category.
 type AbilityReport struct {
 	Ability    string  `json:"ability"`
 	Total      int     `json:"total"`
@@ -29,7 +27,6 @@ type AbilityReport struct {
 	AvgLatency int64   `json:"avg_latency_ms"`
 }
 
-// FailureDetail records a scenario that scored below the passing threshold.
 type FailureDetail struct {
 	ScenarioID string   `json:"scenario_id"`
 	Ability    string   `json:"ability"`
@@ -38,7 +35,6 @@ type FailureDetail struct {
 	FalsePos   []string `json:"false_positives"`
 }
 
-// GenerateReport aggregates a slice of Results into a Report.
 func GenerateReport(results []Result) Report {
 	r := Report{AbilityScores: make(map[string]AbilityReport)}
 	if len(results) == 0 {
@@ -96,8 +92,6 @@ func GenerateReport(results []Result) Report {
 	return r
 }
 
-// percentile returns the p-th percentile from a sorted slice of int64 values.
-// Uses nearest-rank method. Returns 0 for empty slices.
 func percentile(sorted []int64, p int) int64 {
 	if len(sorted) == 0 {
 		return 0
@@ -109,7 +103,6 @@ func percentile(sorted []int64, p int) int64 {
 	return sorted[rank]
 }
 
-// PrintMarkdown formats the report as a Markdown string.
 func (r Report) PrintMarkdown() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# devmem Benchmark Report\n\n## Overall\n| Metric | Value |\n|--------|-------|\n"+
@@ -143,7 +136,6 @@ func (r Report) PrintMarkdown() string {
 	return b.String()
 }
 
-// PrintJSON returns pretty-printed JSON of the full report.
 func (r Report) PrintJSON() string {
 	data, err := json.MarshalIndent(r, "", "  ")
 	if err != nil {

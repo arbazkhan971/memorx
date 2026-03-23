@@ -12,7 +12,6 @@ import (
 	"github.com/arbaz/devmem/internal/storage"
 )
 
-// Scenario defines a single benchmark test case.
 type Scenario struct {
 	ID, Ability, Description string
 	Setup                    []Action
@@ -22,22 +21,18 @@ type Scenario struct {
 	ExpectedFacts            []Fact   `json:"expected_facts,omitempty"`
 }
 
-// Action represents a setup step that populates the devmem instance.
 type Action struct {
 	Tool   string                 `json:"tool"`
 	Params map[string]interface{} `json:"params"`
 }
 
-// Query represents the operation to execute and evaluate.
 type Query struct {
 	Tool   string                 `json:"tool"`
 	Params map[string]interface{} `json:"params"`
 }
 
-// Fact is an expected subject-predicate-object triple.
 type Fact struct{ Subject, Predicate, Object string }
 
-// Result holds the outcome of one scenario evaluation.
 type Result struct {
 	ScenarioID, Ability string
 	Passed              bool
@@ -50,7 +45,6 @@ type Result struct {
 	Error               string   `json:"error,omitempty"`
 }
 
-// Evaluator runs scenarios against a devmem instance.
 type Evaluator struct {
 	store      *memory.Store
 	search     *search.Engine
@@ -61,7 +55,6 @@ type Evaluator struct {
 	featureIDs map[string]string
 }
 
-// NewEvaluator creates a new Evaluator backed by a SQLite database.
 func NewEvaluator(dbPath, gitRoot string) (*Evaluator, error) {
 	db, err := storage.NewDB(dbPath)
 	if err != nil {
@@ -77,10 +70,8 @@ func NewEvaluator(dbPath, gitRoot string) (*Evaluator, error) {
 	}, nil
 }
 
-// Close releases the database resources.
 func (e *Evaluator) Close() error { return e.db.Close() }
 
-// RunAll runs every scenario, resetting the database between each one.
 func (e *Evaluator) RunAll(scenarios []Scenario) []Result {
 	results := make([]Result, 0, len(scenarios))
 	for _, s := range scenarios {
@@ -90,7 +81,6 @@ func (e *Evaluator) RunAll(scenarios []Scenario) []Result {
 	return results
 }
 
-// RunScenario executes a single scenario: setup, query, and evaluation.
 func (e *Evaluator) RunScenario(s Scenario) Result {
 	r := Result{ScenarioID: s.ID, Ability: s.Ability}
 	for i, action := range s.Setup {
@@ -136,7 +126,6 @@ func (e *Evaluator) RunScenario(s Scenario) Result {
 	return r
 }
 
-// Reset drops and recreates all tables for a clean slate.
 func (e *Evaluator) Reset() error {
 	w := e.db.Writer()
 	for _, t := range []string{
@@ -182,107 +171,118 @@ func paramStrSlice(p map[string]interface{}, key string) []string {
 }
 
 func (e *Evaluator) execAction(a Action) error {
-	switch a.Tool {
-	case "start_feature":
-		f, err := e.store.StartFeature(paramStr(a.Params, "name"), paramStr(a.Params, "description"))
-		if err != nil {
+	actions := map[string]func(Action) error{
+		"start_feature": func(a Action) error {
+			f, err := e.store.StartFeature(paramStr(a.Params, "name"), paramStr(a.Params, "description"))
+			if err != nil {
+				return err
+			}
+			e.featureIDs[f.Name] = f.ID
+			sess, err := e.store.CreateSession(f.ID, "benchmark")
+			if err != nil {
+				return fmt.Errorf("auto-create session: %w", err)
+			}
+			e.sessionID = sess.ID
+			return nil
+		},
+		"remember": func(a Action) error {
+			t := paramStr(a.Params, "type")
+			if t == "" {
+				t = "note"
+			}
+			_, err := e.store.CreateNote(e.resolveFeatureID(a.Params), e.sessionID, paramStr(a.Params, "content"), t)
 			return err
-		}
-		e.featureIDs[f.Name] = f.ID
-		sess, err := e.store.CreateSession(f.ID, "benchmark")
-		if err != nil {
-			return fmt.Errorf("auto-create session: %w", err)
-		}
-		e.sessionID = sess.ID
-		return nil
-	case "remember":
-		t := paramStr(a.Params, "type")
-		if t == "" {
-			t = "note"
-		}
-		_, err := e.store.CreateNote(e.resolveFeatureID(a.Params), e.sessionID, paramStr(a.Params, "content"), t)
-		return err
-	case "add_fact":
-		_, err := e.store.CreateFact(e.resolveFeatureID(a.Params), e.sessionID,
-			paramStr(a.Params, "subject"), paramStr(a.Params, "predicate"), paramStr(a.Params, "object"))
-		return err
-	case "save_plan":
-		var steps []plans.StepInput
-		if raw, ok := a.Params["steps"]; ok {
-			if sl, ok := raw.([]interface{}); ok {
+		},
+		"add_fact": func(a Action) error {
+			_, err := e.store.CreateFact(e.resolveFeatureID(a.Params), e.sessionID,
+				paramStr(a.Params, "subject"), paramStr(a.Params, "predicate"), paramStr(a.Params, "object"))
+			return err
+		},
+		"save_plan": func(a Action) error {
+			var steps []plans.StepInput
+			if sl, ok := a.Params["steps"].([]interface{}); ok {
 				for _, item := range sl {
 					if m, ok := item.(map[string]interface{}); ok {
 						steps = append(steps, plans.StepInput{Title: paramStr(m, "title"), Description: paramStr(m, "description")})
 					}
 				}
 			}
-		}
-		_, err := e.plans.CreatePlan(e.resolveFeatureID(a.Params), e.sessionID,
-			paramStr(a.Params, "title"), paramStr(a.Params, "content"), "benchmark", steps)
-		return err
-	case "sync":
-		return nil
-	case "end_session":
-		if e.sessionID == "" {
-			return nil
-		}
-		err := e.store.EndSession(e.sessionID)
-		e.sessionID = ""
-		return err
-	case "start_session":
-		t := paramStr(a.Params, "tool")
-		if t == "" {
-			t = "benchmark"
-		}
-		sess, err := e.store.CreateSession(e.resolveFeatureID(a.Params), t)
-		if err != nil {
+			_, err := e.plans.CreatePlan(e.resolveFeatureID(a.Params), e.sessionID,
+				paramStr(a.Params, "title"), paramStr(a.Params, "content"), "benchmark", steps)
 			return err
-		}
-		e.sessionID = sess.ID
-		return nil
-	default:
-		return fmt.Errorf("unknown action tool: %q", a.Tool)
+		},
+		"sync": func(Action) error { return nil },
+		"end_session": func(Action) error {
+			if e.sessionID == "" {
+				return nil
+			}
+			err := e.store.EndSession(e.sessionID)
+			e.sessionID = ""
+			return err
+		},
+		"start_session": func(a Action) error {
+			t := paramStr(a.Params, "tool")
+			if t == "" {
+				t = "benchmark"
+			}
+			sess, err := e.store.CreateSession(e.resolveFeatureID(a.Params), t)
+			if err != nil {
+				return err
+			}
+			e.sessionID = sess.ID
+			return nil
+		},
 	}
+	if fn, ok := actions[a.Tool]; ok {
+		return fn(a)
+	}
+	return fmt.Errorf("unknown action tool: %q", a.Tool)
 }
 
 func (e *Evaluator) execQuery(q Query) (string, error) {
-	switch q.Tool {
-	case "get_context":
-		tier := paramStr(q.Params, "tier")
-		if tier == "" {
-			tier = "standard"
-		}
-		ctx, err := e.store.GetContext(e.resolveFeatureID(q.Params), tier, nil)
-		if err != nil {
-			return "", err
-		}
-		return formatContext(ctx), nil
-	case "search":
-		scope := paramStr(q.Params, "scope")
-		if scope == "" {
-			scope = "all_features"
-		}
-		results, err := e.search.Search(paramStr(q.Params, "query"), scope,
-			paramStrSlice(q.Params, "types"), e.resolveFeatureID(q.Params), 20)
-		if err != nil {
-			return "", err
-		}
-		return formatSearchResults(results), nil
-	case "get_facts":
-		facts, err := e.store.GetActiveFacts(e.resolveFeatureID(q.Params))
-		if err != nil {
-			return "", err
-		}
-		return formatFacts(facts), nil
-	case "list_features":
-		features, err := e.store.ListFeatures("all")
-		if err != nil {
-			return "", err
-		}
-		return formatFeatures(features), nil
-	default:
-		return "", fmt.Errorf("unknown query tool: %q", q.Tool)
+	queries := map[string]func(Query) (string, error){
+		"get_context": func(q Query) (string, error) {
+			tier := paramStr(q.Params, "tier")
+			if tier == "" {
+				tier = "standard"
+			}
+			ctx, err := e.store.GetContext(e.resolveFeatureID(q.Params), tier, nil)
+			if err != nil {
+				return "", err
+			}
+			return formatContext(ctx), nil
+		},
+		"search": func(q Query) (string, error) {
+			scope := paramStr(q.Params, "scope")
+			if scope == "" {
+				scope = "all_features"
+			}
+			results, err := e.search.Search(paramStr(q.Params, "query"), scope,
+				paramStrSlice(q.Params, "types"), e.resolveFeatureID(q.Params), 20)
+			if err != nil {
+				return "", err
+			}
+			return formatSearchResults(results), nil
+		},
+		"get_facts": func(q Query) (string, error) {
+			facts, err := e.store.GetActiveFacts(e.resolveFeatureID(q.Params))
+			if err != nil {
+				return "", err
+			}
+			return formatFacts(facts), nil
+		},
+		"list_features": func(Query) (string, error) {
+			features, err := e.store.ListFeatures("all")
+			if err != nil {
+				return "", err
+			}
+			return formatFeatures(features), nil
+		},
 	}
+	if fn, ok := queries[q.Tool]; ok {
+		return fn(q)
+	}
+	return "", fmt.Errorf("unknown query tool: %q", q.Tool)
 }
 
 func (e *Evaluator) resolveFeatureID(p map[string]interface{}) string {
@@ -300,8 +300,6 @@ func (e *Evaluator) resolveFeatureID(p map[string]interface{}) string {
 	return ""
 }
 
-// --- Formatting helpers ---
-
 func formatContext(ctx *memory.Context) string {
 	var b strings.Builder
 	if f := ctx.Feature; f != nil {
@@ -317,22 +315,24 @@ func formatContext(ctx *memory.Context) string {
 	if p := ctx.Plan; p != nil {
 		fmt.Fprintf(&b, "Plan: %s %d/%d\n", p.Title, p.CompletedStep, p.TotalSteps)
 	}
-	if len(ctx.ActiveFacts) > 0 {
-		b.WriteString("Facts:")
+	appendSection := func(label string, items int, fn func()) {
+		if items > 0 {
+			b.WriteString(label)
+			fn()
+			b.WriteByte('\n')
+		}
+	}
+	appendSection("Facts:", len(ctx.ActiveFacts), func() {
 		for _, f := range ctx.ActiveFacts {
 			fmt.Fprintf(&b, " %s %s %s;", f.Subject, f.Predicate, f.Object)
 		}
-		b.WriteByte('\n')
-	}
-	if len(ctx.RecentNotes) > 0 {
-		b.WriteString("Notes:")
+	})
+	appendSection("Notes:", len(ctx.RecentNotes), func() {
 		for _, n := range ctx.RecentNotes {
 			fmt.Fprintf(&b, " [%s] %s;", n.Type, n.Content)
 		}
-		b.WriteByte('\n')
-	}
-	if len(ctx.RecentCommits) > 0 {
-		b.WriteString("Commits:")
+	})
+	appendSection("Commits:", len(ctx.RecentCommits), func() {
 		for _, c := range ctx.RecentCommits {
 			h := c.Hash
 			if len(h) > 7 {
@@ -340,15 +340,12 @@ func formatContext(ctx *memory.Context) string {
 			}
 			fmt.Fprintf(&b, " %s %s;", h, c.Message)
 		}
-		b.WriteByte('\n')
-	}
-	if len(ctx.SessionHistory) > 0 {
-		b.WriteString("Sessions:")
+	})
+	appendSection("Sessions:", len(ctx.SessionHistory), func() {
 		for _, s := range ctx.SessionHistory {
 			fmt.Fprintf(&b, " %s %s;", s.Tool, s.StartedAt)
 		}
-		b.WriteByte('\n')
-	}
+	})
 	return b.String()
 }
 
@@ -385,8 +382,6 @@ func formatFeatures(features []memory.Feature) string {
 	return b.String()
 }
 
-// NewTempEvaluator creates an Evaluator with a temporary database file
-// that is automatically cleaned up when Close is called.
 func NewTempEvaluator() (*Evaluator, error) {
 	tmpFile, err := os.CreateTemp("", "devmem-bench-*.db")
 	if err != nil {

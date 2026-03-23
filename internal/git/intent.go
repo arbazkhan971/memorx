@@ -27,62 +27,37 @@ var (
 		intent    string
 		predicate func(string) bool
 	}{{"test", isTestFile}, {"infra", isInfraFile}, {"docs", isDocFile}}
+	tokenReplacer = strings.NewReplacer(
+		":", " ", "/", " ", "-", " ", "_", " ", "(", " ", ")", " ",
+		"[", " ", "]", " ", ",", " ", ".", " ", "!", " ", "#", " ",
+	)
 )
 
 func ClassifyIntent(message string, files []string) (string, float64) {
-	if it, ok := checkConventionalPrefix(message); ok {
-		return it, 0.9
+	lower := strings.ToLower(strings.TrimSpace(message))
+	for prefix, it := range conventionalPrefixes {
+		if strings.HasPrefix(lower, prefix+":") || strings.HasPrefix(lower, prefix+"(") {
+			return it, 0.9
+		}
 	}
-	if it, ok := checkMessageKeywords(message); ok {
-		return it, 0.8
+	for _, word := range strings.Fields(tokenReplacer.Replace(lower)) {
+		if it, ok := messageKeywords[word]; ok {
+			return it, 0.8
+		}
 	}
-	if it, ok := checkFileSignals(files); ok {
-		return it, 0.6
+	if len(files) > 0 {
+		for _, rule := range fileSignalRules {
+			if allMatch(files, rule.predicate) {
+				return rule.intent, 0.6
+			}
+		}
 	}
 	return "unknown", 0.0
 }
 
-func checkConventionalPrefix(message string) (string, bool) {
-	lower := strings.ToLower(strings.TrimSpace(message))
-	for prefix, intentType := range conventionalPrefixes {
-		if strings.HasPrefix(lower, prefix+":") || strings.HasPrefix(lower, prefix+"(") {
-			return intentType, true
-		}
-	}
-	return "", false
-}
-
-func checkMessageKeywords(message string) (string, bool) {
-	for _, word := range tokenize(strings.ToLower(message)) {
-		if intentType, ok := messageKeywords[word]; ok {
-			return intentType, true
-		}
-	}
-	return "", false
-}
-
-func tokenize(message string) []string {
-	return strings.Fields(strings.NewReplacer(
-		":", " ", "/", " ", "-", " ", "_", " ", "(", " ", ")", " ",
-		"[", " ", "]", " ", ",", " ", ".", " ", "!", " ", "#", " ",
-	).Replace(message))
-}
-
-func checkFileSignals(files []string) (string, bool) {
-	if len(files) == 0 {
-		return "", false
-	}
-	for _, rule := range fileSignalRules {
-		if allMatch(files, rule.predicate) {
-			return rule.intent, true
-		}
-	}
-	return "", false
-}
-
-func allMatch(files []string, predicate func(string) bool) bool {
+func allMatch(files []string, pred func(string) bool) bool {
 	for _, f := range files {
-		if !predicate(f) {
+		if !pred(f) {
 			return false
 		}
 	}
