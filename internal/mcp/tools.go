@@ -879,3 +879,194 @@ func truncate(s string, n int) string {
 	}
 	return s[:n] + "..."
 }
+
+// handleAnalytics implements devmem_analytics.
+func (s *DevMemServer) handleAnalytics(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+	featureName := getStringArg(req, "feature", "")
+
+	if featureName != "" {
+		return s.handleFeatureAnalytics(featureName)
+	}
+	return s.handleProjectAnalytics()
+}
+
+func (s *DevMemServer) handleFeatureAnalytics(featureName string) (*mcplib.CallToolResult, error) {
+	feature, err := s.store.GetFeature(featureName)
+	if err != nil {
+		return mcplib.NewToolResultError(fmt.Sprintf("Feature '%s' not found", featureName)), nil
+	}
+
+	a, err := s.store.GetFeatureAnalytics(feature.ID)
+	if err != nil {
+		return mcplib.NewToolResultError(fmt.Sprintf("Failed to get analytics: %v", err)), nil
+	}
+
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("# Feature Analytics: %s\n\n", a.Name))
+	b.WriteString(fmt.Sprintf("**Age:** %d days (last active %d days ago)\n", a.DaysSinceCreated, a.DaysSinceLastActive))
+	b.WriteString(fmt.Sprintf("**Avg session duration:** %s\n\n", a.AvgSessionDuration))
+
+	b.WriteString("## Activity Counts\n\n")
+	b.WriteString("| Metric | Count |\n")
+	b.WriteString("|--------|-------|\n")
+	b.WriteString(fmt.Sprintf("| Sessions | %d |\n", a.SessionCount))
+	b.WriteString(fmt.Sprintf("| Commits | %d |\n", a.CommitCount))
+	b.WriteString(fmt.Sprintf("| Notes | %d |\n", a.NoteCount))
+	b.WriteString(fmt.Sprintf("| Decisions | %d |\n", a.DecisionCount))
+	b.WriteString(fmt.Sprintf("| Blockers | %d |\n", a.BlockerCount))
+	b.WriteString(fmt.Sprintf("| Facts (active) | %d |\n", a.ActiveFactCount))
+	b.WriteString(fmt.Sprintf("| Facts (invalidated) | %d |\n", a.InvalidatedFactCount))
+
+	b.WriteString(fmt.Sprintf("\n## Plan Progress\n\n%s\n", a.PlanProgress))
+
+	if len(a.IntentBreakdown) > 0 {
+		b.WriteString("\n## Commit Intent Breakdown\n\n")
+		b.WriteString("| Intent | Count |\n")
+		b.WriteString("|--------|-------|\n")
+		for intent, count := range a.IntentBreakdown {
+			b.WriteString(fmt.Sprintf("| %s | %d |\n", intent, count))
+		}
+	}
+
+	return mcplib.NewToolResultText(b.String()), nil
+}
+
+func (s *DevMemServer) handleProjectAnalytics() (*mcplib.CallToolResult, error) {
+	a, err := s.store.GetProjectAnalytics()
+	if err != nil {
+		return mcplib.NewToolResultError(fmt.Sprintf("Failed to get analytics: %v", err)), nil
+	}
+
+	var b strings.Builder
+	b.WriteString("# Project Analytics\n\n")
+
+	b.WriteString("## Features\n\n")
+	b.WriteString("| Status | Count |\n")
+	b.WriteString("|--------|-------|\n")
+	b.WriteString(fmt.Sprintf("| Total | %d |\n", a.TotalFeatures))
+	b.WriteString(fmt.Sprintf("| Active | %d |\n", a.ActiveFeatures))
+	b.WriteString(fmt.Sprintf("| Paused | %d |\n", a.PausedFeatures))
+	b.WriteString(fmt.Sprintf("| Done | %d |\n", a.DoneFeatures))
+
+	b.WriteString("\n## Totals\n\n")
+	b.WriteString("| Metric | Count |\n")
+	b.WriteString("|--------|-------|\n")
+	b.WriteString(fmt.Sprintf("| Sessions | %d |\n", a.TotalSessions))
+	b.WriteString(fmt.Sprintf("| Commits | %d |\n", a.TotalCommits))
+	b.WriteString(fmt.Sprintf("| Notes | %d |\n", a.TotalNotes))
+	b.WriteString(fmt.Sprintf("| Facts | %d |\n", a.TotalFacts))
+
+	if a.MostActiveFeature != "" {
+		b.WriteString(fmt.Sprintf("\n**Most active feature:** %s\n", a.MostActiveFeature))
+	}
+	if a.MostBlockedFeature != "" {
+		b.WriteString(fmt.Sprintf("**Most blocked feature:** %s\n", a.MostBlockedFeature))
+	}
+
+	if len(a.RecentActivity) > 0 {
+		b.WriteString("\n## Recent Activity\n\n")
+		for _, activity := range a.RecentActivity {
+			b.WriteString(fmt.Sprintf("- %s\n", activity))
+		}
+	}
+
+	return mcplib.NewToolResultText(b.String()), nil
+}
+
+// handleHealth implements devmem_health.
+func (s *DevMemServer) handleHealth(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+	featureName := getStringArg(req, "feature", "")
+
+	var featureID string
+	if featureName != "" {
+		feature, err := s.store.GetFeature(featureName)
+		if err != nil {
+			return mcplib.NewToolResultError(fmt.Sprintf("Feature '%s' not found", featureName)), nil
+		}
+		featureID = feature.ID
+	}
+
+	h, err := s.store.GetMemoryHealth(featureID)
+	if err != nil {
+		return mcplib.NewToolResultError(fmt.Sprintf("Failed to get memory health: %v", err)), nil
+	}
+
+	var b strings.Builder
+	scope := "All Features"
+	if featureName != "" {
+		scope = featureName
+	}
+	b.WriteString(fmt.Sprintf("# Memory Health: %s\n\n", scope))
+	b.WriteString(fmt.Sprintf("**Score: %.0f/100**\n\n", h.Score))
+
+	b.WriteString("## Metrics\n\n")
+	b.WriteString("| Metric | Count |\n")
+	b.WriteString("|--------|-------|\n")
+	b.WriteString(fmt.Sprintf("| Total memories | %d |\n", h.TotalMemories))
+	b.WriteString(fmt.Sprintf("| Active facts | %d |\n", h.ActiveFacts))
+	b.WriteString(fmt.Sprintf("| Stale facts | %d |\n", h.StaleFactCount))
+	b.WriteString(fmt.Sprintf("| Conflicts | %d |\n", h.ConflictCount))
+	b.WriteString(fmt.Sprintf("| Orphan notes | %d |\n", h.OrphanNoteCount))
+	b.WriteString(fmt.Sprintf("| Stale notes | %d |\n", h.StaleNoteCount))
+	b.WriteString(fmt.Sprintf("| Summaries | %d |\n", h.SummaryCount))
+
+	if len(h.Suggestions) > 0 {
+		b.WriteString("\n## Suggestions\n\n")
+		for _, suggestion := range h.Suggestions {
+			b.WriteString(fmt.Sprintf("- %s\n", suggestion))
+		}
+	} else {
+		b.WriteString("\nMemory is healthy. No issues found.\n")
+	}
+
+	return mcplib.NewToolResultText(b.String()), nil
+}
+
+// handleForget implements devmem_forget.
+func (s *DevMemServer) handleForget(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+	what := getStringArg(req, "what", "")
+	if what == "" {
+		return mcplib.NewToolResultError("Parameter 'what' is required"), nil
+	}
+	featureName := getStringArg(req, "feature", "")
+
+	var featureID string
+	if featureName != "" {
+		feature, err := s.store.GetFeature(featureName)
+		if err != nil {
+			return mcplib.NewToolResultError(fmt.Sprintf("Feature '%s' not found", featureName)), nil
+		}
+		featureID = feature.ID
+	}
+
+	switch what {
+	case "stale_facts":
+		deleted, err := s.store.ForgetStaleFacts(featureID)
+		if err != nil {
+			return mcplib.NewToolResultError(fmt.Sprintf("Failed to forget stale facts: %v", err)), nil
+		}
+		return mcplib.NewToolResultText(fmt.Sprintf("Deleted %d stale facts (invalidated 30+ days ago).", deleted)), nil
+
+	case "stale_notes":
+		deleted, err := s.store.ForgetStaleNotes(featureID)
+		if err != nil {
+			return mcplib.NewToolResultError(fmt.Sprintf("Failed to forget stale notes: %v", err)), nil
+		}
+		return mcplib.NewToolResultText(fmt.Sprintf("Deleted %d stale notes (60+ days old, no links).", deleted)), nil
+
+	case "completed_features":
+		deleted, err := s.store.ForgetCompletedFeatures()
+		if err != nil {
+			return mcplib.NewToolResultError(fmt.Sprintf("Failed to forget completed features: %v", err)), nil
+		}
+		return mcplib.NewToolResultText(fmt.Sprintf("Deleted %d completed features (done 90+ days ago).", deleted)), nil
+
+	default:
+		// Treat as a specific ID
+		typ, err := s.store.ForgetByID(what)
+		if err != nil {
+			return mcplib.NewToolResultError(fmt.Sprintf("Failed to forget: %v", err)), nil
+		}
+		return mcplib.NewToolResultText(fmt.Sprintf("Deleted %s with ID %s.", typ, what)), nil
+	}
+}

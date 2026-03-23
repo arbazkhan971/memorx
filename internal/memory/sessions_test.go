@@ -229,3 +229,39 @@ func TestListSessions_FilterByFeature(t *testing.T) {
 		t.Errorf("expected feature ID %q, got %q", fa.ID, sessions[0].FeatureID)
 	}
 }
+
+func TestEndSessionWithSummary(t *testing.T) {
+	store := newTestStore(t)
+
+	f, _ := store.CreateFeature("feat-summary", "Summary test")
+	sess, _ := store.CreateSession(f.ID, "test-tool")
+
+	summary := "Implemented the user auth flow and wrote tests for it"
+	if err := store.EndSessionWithSummary(sess.ID, summary); err != nil {
+		t.Fatalf("EndSessionWithSummary: %v", err)
+	}
+
+	// Verify the session is ended and summary is stored
+	sessions, err := store.ListSessions(f.ID, 10)
+	if err != nil {
+		t.Fatalf("ListSessions: %v", err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("expected 1 session, got %d", len(sessions))
+	}
+	if sessions[0].EndedAt == "" {
+		t.Error("expected non-empty EndedAt after EndSessionWithSummary")
+	}
+	if sessions[0].Summary != summary {
+		t.Errorf("expected summary %q, got %q", summary, sessions[0].Summary)
+	}
+}
+
+func TestEndSessionWithSummary_NotFound(t *testing.T) {
+	store := newTestStore(t)
+
+	err := store.EndSessionWithSummary("nonexistent-id", "some summary")
+	if err == nil {
+		t.Fatal("expected error for nonexistent session")
+	}
+}

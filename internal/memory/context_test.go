@@ -327,3 +327,45 @@ func TestGetContext_WithPlanReturnsPlanInfo(t *testing.T) {
 		t.Errorf("expected 1 completed step, got %d", ctx.Plan.CompletedStep)
 	}
 }
+
+func TestGetContext_IncludesLastSessionSummary(t *testing.T) {
+	store := newTestStore(t)
+
+	f, _ := store.CreateFeature("feat-sess-summary", "Session summary test")
+
+	// Create a session, end it with a summary.
+	sess1, _ := store.CreateSession(f.ID, "claude-code")
+	summary := "Added user authentication with JWT tokens and wrote unit tests"
+	if err := store.EndSessionWithSummary(sess1.ID, summary); err != nil {
+		t.Fatalf("EndSessionWithSummary: %v", err)
+	}
+
+	// Create a new (current) session.
+	store.CreateSession(f.ID, "claude-code")
+
+	// GetContext should include the previous session's summary.
+	ctx, err := store.GetContext(f.ID, "compact", nil)
+	if err != nil {
+		t.Fatalf("GetContext: %v", err)
+	}
+
+	if ctx.LastSessionSummary != summary {
+		t.Errorf("expected LastSessionSummary %q, got %q", summary, ctx.LastSessionSummary)
+	}
+}
+
+func TestGetContext_NoLastSessionSummaryWhenNoPrevious(t *testing.T) {
+	store := newTestStore(t)
+
+	f, _ := store.CreateFeature("feat-no-summary", "No previous session")
+	store.CreateSession(f.ID, "claude-code")
+
+	ctx, err := store.GetContext(f.ID, "compact", nil)
+	if err != nil {
+		t.Fatalf("GetContext: %v", err)
+	}
+
+	if ctx.LastSessionSummary != "" {
+		t.Errorf("expected empty LastSessionSummary, got %q", ctx.LastSessionSummary)
+	}
+}

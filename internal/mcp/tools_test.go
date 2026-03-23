@@ -820,3 +820,119 @@ func TestHandleSwitchFeature_CreatesNewSession(t *testing.T) {
 		t.Errorf("status after switch should show switch-feat-a as active, got:\n%s", statusText)
 	}
 }
+
+func TestHandleEndSession(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	ctx := context.Background()
+
+	// Start a feature first.
+	_, err := srv.handleStartFeature(ctx, newReq("devmem_start_feature", map[string]interface{}{
+		"name": "end-session-test",
+	}))
+	if err != nil {
+		t.Fatalf("handleStartFeature error: %v", err)
+	}
+
+	// End session with a summary.
+	res, err := srv.handleEndSession(ctx, newReq("devmem_end_session", map[string]interface{}{
+		"summary": "Implemented user auth flow and wrote integration tests",
+	}))
+	if err != nil {
+		t.Fatalf("handleEndSession error: %v", err)
+	}
+
+	text := resultText(t, res)
+	if !strings.Contains(text, "Session ended") {
+		t.Errorf("end session result should contain 'Session ended', got:\n%s", text)
+	}
+	if !strings.Contains(text, "Summary saved") {
+		t.Errorf("end session result should contain 'Summary saved', got:\n%s", text)
+	}
+	if !strings.Contains(text, "Progress note created") {
+		t.Errorf("end session result should contain 'Progress note created', got:\n%s", text)
+	}
+	if !strings.Contains(text, "next session will see this summary") {
+		t.Errorf("end session result should mention next session, got:\n%s", text)
+	}
+}
+
+func TestHandleEndSession_NoActiveSession(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	ctx := context.Background()
+
+	// Don't start a feature — no session exists.
+	res, err := srv.handleEndSession(ctx, newReq("devmem_end_session", map[string]interface{}{
+		"summary": "nothing happened",
+	}))
+	if err != nil {
+		t.Fatalf("handleEndSession error: %v", err)
+	}
+
+	text := resultText(t, res)
+	if !strings.Contains(text, "No active session") {
+		t.Errorf("end session without active session should error, got:\n%s", text)
+	}
+}
+
+func TestHandleEndSession_MissingSummary(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	ctx := context.Background()
+
+	_, _ = srv.handleStartFeature(ctx, newReq("devmem_start_feature", map[string]interface{}{
+		"name": "end-session-missing-summary",
+	}))
+
+	res, err := srv.handleEndSession(ctx, newReq("devmem_end_session", map[string]interface{}{}))
+	if err != nil {
+		t.Fatalf("handleEndSession error: %v", err)
+	}
+
+	text := resultText(t, res)
+	if !strings.Contains(text, "required") {
+		t.Errorf("end session without summary should error about required param, got:\n%s", text)
+	}
+}
+
+func TestHandleEndSession_SummaryAppearsInContext(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	ctx := context.Background()
+
+	// Start a feature and end the session with a summary.
+	_, err := srv.handleStartFeature(ctx, newReq("devmem_start_feature", map[string]interface{}{
+		"name": "summary-in-context-test",
+	}))
+	if err != nil {
+		t.Fatalf("handleStartFeature error: %v", err)
+	}
+
+	_, err = srv.handleEndSession(ctx, newReq("devmem_end_session", map[string]interface{}{
+		"summary": "Built the database schema and migration system",
+	}))
+	if err != nil {
+		t.Fatalf("handleEndSession error: %v", err)
+	}
+
+	// Start a new session (re-start the same feature).
+	_, err = srv.handleStartFeature(ctx, newReq("devmem_start_feature", map[string]interface{}{
+		"name": "summary-in-context-test",
+	}))
+	if err != nil {
+		t.Fatalf("handleStartFeature resume error: %v", err)
+	}
+
+	// Get context — should include the previous session's summary.
+	res, err := srv.handleGetContext(ctx, newReq("devmem_get_context", map[string]interface{}{
+		"tier": "compact",
+	}))
+	if err != nil {
+		t.Fatalf("handleGetContext error: %v", err)
+	}
+
+	text := resultText(t, res)
+	if !strings.Contains(text, "Last Session") {
+		t.Errorf("context should contain 'Last Session' section, got:\n%s", text)
+	}
+	if !strings.Contains(text, "database schema and migration") {
+		t.Errorf("context should contain the session summary text, got:\n%s", text)
+	}
+}

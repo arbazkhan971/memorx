@@ -166,11 +166,19 @@ func (s *DevMemServer) registerTools(srv *server.MCPServer) {
 			Handler: s.handleExport,
 		},
 		server.ServerTool{
-			Tool: mcplib.NewTool("devmem_analytics",
-				mcplib.WithDescription("Get development analytics and insights: session counts, commit patterns, blocker frequency, feature health. Helps understand where time is spent and what's blocked."),
-				mcplib.WithString("feature", mcplib.Description("Specific feature name (default: project-wide analytics)")),
+			Tool: mcplib.NewTool("devmem_health",
+				mcplib.WithDescription("Check memory health: conflicts, stale data, orphan notes. Returns a health score and actionable suggestions."),
+				mcplib.WithString("feature", mcplib.Description("Check health for a specific feature (default: all)")),
 			),
-			Handler: s.handleAnalytics,
+			Handler: s.handleHealth,
+		},
+		server.ServerTool{
+			Tool: mcplib.NewTool("devmem_forget",
+				mcplib.WithDescription("Forget/archive stale memories. Use to clean up outdated notes, invalidated facts, or completed features."),
+				mcplib.WithString("what", mcplib.Description("What to forget: stale_facts, stale_notes, completed_features, or a specific note/fact ID"), mcplib.Required()),
+				mcplib.WithString("feature", mcplib.Description("Scope to a specific feature")),
+			),
+			Handler: s.handleForget,
 		},
 	)
 }
