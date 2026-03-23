@@ -13,19 +13,14 @@ import (
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 )
 
-// --- helpers: reduce boilerplate across all handlers ---
-
-// respond builds a successful text CallToolResult from a format string.
 func respond(format string, args ...interface{}) (*mcplib.CallToolResult, error) {
 	return mcplib.NewToolResultText(fmt.Sprintf(format, args...)), nil
 }
 
-// respondErr builds an error CallToolResult from a format string.
 func respondErr(format string, args ...interface{}) (*mcplib.CallToolResult, error) {
 	return mcplib.NewToolResultError(fmt.Sprintf(format, args...)), nil
 }
 
-// requireActiveFeature returns the active feature or an error result.
 func (s *DevMemServer) requireActiveFeature() (*memory.Feature, *mcplib.CallToolResult) {
 	f, err := s.store.GetActiveFeature()
 	if err != nil {
@@ -34,7 +29,6 @@ func (s *DevMemServer) requireActiveFeature() (*memory.Feature, *mcplib.CallTool
 	return f, nil
 }
 
-// requireParam extracts a required string parameter or returns an error result.
 func requireParam(req mcplib.CallToolRequest, name string) (string, *mcplib.CallToolResult) {
 	v := getStringArg(req, name, "")
 	if v == "" {
@@ -43,7 +37,6 @@ func requireParam(req mcplib.CallToolRequest, name string) (string, *mcplib.Call
 	return v, nil
 }
 
-// mdTable formats rows as a markdown table with two columns.
 func mdTable(header1, header2 string, rows [][2]string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "| %s | %s |\n|--------|-------|\n", header1, header2)
@@ -62,7 +55,6 @@ func getBoolArg(req mcplib.CallToolRequest, name string, fallback bool) bool {
 	return fallback
 }
 
-// getStringArg extracts a string argument from the request, returning fallback if missing.
 func getStringArg(req mcplib.CallToolRequest, name, fallback string) string {
 	if args := req.GetArguments(); args != nil {
 		if v, ok := args[name].(string); ok && v != "" {
@@ -72,26 +64,21 @@ func getStringArg(req mcplib.CallToolRequest, name, fallback string) string {
 	return fallback
 }
 
-// getStringSliceArg extracts a string slice argument from the request.
 func getStringSliceArg(req mcplib.CallToolRequest, name string) []string {
-	args := req.GetArguments()
-	if args == nil {
-		return nil
-	}
-	arr, ok := args[name].([]interface{})
-	if !ok {
-		return nil
-	}
-	var result []string
-	for _, item := range arr {
-		if s, ok := item.(string); ok {
-			result = append(result, s)
+	if args := req.GetArguments(); args != nil {
+		if arr, ok := args[name].([]interface{}); ok {
+			var result []string
+			for _, item := range arr {
+				if s, ok := item.(string); ok {
+					result = append(result, s)
+				}
+			}
+			return result
 		}
 	}
-	return result
+	return nil
 }
 
-// handleStatus implements devmem_status.
 func (s *DevMemServer) handleStatus(_ context.Context, _ mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# devmem status — %s\n\n", git.ProjectName(s.gitRoot))
@@ -140,7 +127,6 @@ func (s *DevMemServer) handleStatus(_ context.Context, _ mcplib.CallToolRequest)
 	return mcplib.NewToolResultText(b.String()), nil
 }
 
-// handleListFeatures implements devmem_list_features.
 func (s *DevMemServer) handleListFeatures(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	filter := getStringArg(req, "status_filter", "all")
 	features, err := s.store.ListFeatures(filter)
@@ -166,9 +152,6 @@ func (s *DevMemServer) handleListFeatures(_ context.Context, req mcplib.CallTool
 	return mcplib.NewToolResultText(b.String()), nil
 }
 
-// activateFeature is the shared core of handleStartFeature and handleSwitchFeature.
-// It ends the current session, starts/resumes the named feature, creates a new session,
-// and returns the feature plus a compact context string.
 func (s *DevMemServer) activateFeature(name, description string) (*memory.Feature, string, error) {
 	if s.currentSessionID != "" {
 		_ = s.store.EndSession(s.currentSessionID)
@@ -191,7 +174,6 @@ func (s *DevMemServer) activateFeature(name, description string) (*memory.Featur
 	return feature, ctxText, nil
 }
 
-// handleStartFeature implements devmem_start_feature.
 func (s *DevMemServer) handleStartFeature(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	name, errRes := requireParam(req, "name")
 	if errRes != nil {
@@ -225,7 +207,6 @@ func (s *DevMemServer) handleStartFeature(_ context.Context, req mcplib.CallTool
 	return mcplib.NewToolResultText(b.String()), nil
 }
 
-// handleSwitchFeature implements devmem_switch_feature.
 func (s *DevMemServer) handleSwitchFeature(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	name, errRes := requireParam(req, "name")
 	if errRes != nil {
@@ -249,7 +230,6 @@ func (s *DevMemServer) handleSwitchFeature(_ context.Context, req mcplib.CallToo
 	return mcplib.NewToolResultText(b.String()), nil
 }
 
-// handleGetContext implements devmem_get_context.
 func (s *DevMemServer) handleGetContext(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	feature, errRes := s.requireActiveFeature()
 	if errRes != nil {
@@ -278,7 +258,6 @@ func (s *DevMemServer) handleGetContext(_ context.Context, req mcplib.CallToolRe
 	return mcplib.NewToolResultText(formatContext(ctxData)), nil
 }
 
-// handleSync implements devmem_sync.
 func (s *DevMemServer) handleSync(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	feature, errRes := s.requireActiveFeature()
 	if errRes != nil {
@@ -321,7 +300,6 @@ func (s *DevMemServer) handleSync(_ context.Context, req mcplib.CallToolRequest)
 	return mcplib.NewToolResultText(b.String()), nil
 }
 
-// handleRemember implements devmem_remember.
 func (s *DevMemServer) handleRemember(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	content, errRes := requireParam(req, "content")
 	if errRes != nil {
@@ -357,7 +335,6 @@ func (s *DevMemServer) handleRemember(_ context.Context, req mcplib.CallToolRequ
 	return mcplib.NewToolResultText(b.String()), nil
 }
 
-// handleSearch implements devmem_search.
 func (s *DevMemServer) handleSearch(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	query, errRes := requireParam(req, "query")
 	if errRes != nil {
@@ -395,7 +372,6 @@ func (s *DevMemServer) handleSearch(_ context.Context, req mcplib.CallToolReques
 	return mcplib.NewToolResultText(b.String()), nil
 }
 
-// handleSavePlan implements devmem_save_plan.
 func (s *DevMemServer) handleSavePlan(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	title, errRes := requireParam(req, "title")
 	if errRes != nil {
@@ -451,7 +427,6 @@ func (s *DevMemServer) handleSavePlan(_ context.Context, req mcplib.CallToolRequ
 	return mcplib.NewToolResultText(b.String()), nil
 }
 
-// handleImportSession implements devmem_import_session.
 func (s *DevMemServer) handleImportSession(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	featureName, errRes := requireParam(req, "feature_name")
 	if errRes != nil {
@@ -490,7 +465,6 @@ func (s *DevMemServer) handleImportSession(_ context.Context, req mcplib.CallToo
 		}
 	}
 
-	// Import facts
 	args := req.GetArguments()
 	if factsArr, ok := args["facts"].([]interface{}); ok {
 		factCount := 0
@@ -512,7 +486,6 @@ func (s *DevMemServer) handleImportSession(_ context.Context, req mcplib.CallToo
 		}
 	}
 
-	// Import plan
 	if planTitle := getStringArg(req, "plan_title", ""); planTitle != "" {
 		if planStepsArr, ok := args["plan_steps"].([]interface{}); ok {
 			var steps []plans.StepInput
@@ -547,7 +520,6 @@ func (s *DevMemServer) handleImportSession(_ context.Context, req mcplib.CallToo
 		}
 	}
 
-	// Auto-link all imported memories
 	linksCreated := 0
 	if imported > 0 {
 		notes, _ := s.store.ListNotes(feature.ID, "", imported)
@@ -562,7 +534,6 @@ func (s *DevMemServer) handleImportSession(_ context.Context, req mcplib.CallToo
 	return mcplib.NewToolResultText(b.String()), nil
 }
 
-// importNotes creates notes of the given type and returns the count of successfully created ones.
 func importNotes(store interface {
 	CreateNote(featureID, sessionID, content, noteType string) (*memory.Note, error)
 }, featureID, sessionID string, notes []string, noteType string) int {
@@ -575,7 +546,6 @@ func importNotes(store interface {
 	return count
 }
 
-// handleEndSession implements devmem_end_session.
 func (s *DevMemServer) handleEndSession(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	summary, errRes := requireParam(req, "summary")
 	if errRes != nil {
@@ -606,7 +576,6 @@ func (s *DevMemServer) handleEndSession(_ context.Context, req mcplib.CallToolRe
 		sessionID[:8], truncate(summary, 80), note.ID[:8], linksCreated)
 }
 
-// handleExport implements devmem_export.
 func (s *DevMemServer) handleExport(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	featureName := getStringArg(req, "feature_name", "")
 	format := getStringArg(req, "format", "markdown")
@@ -652,11 +621,9 @@ func (s *DevMemServer) exportMarkdown(feature *memory.Feature, ctx *memory.Conte
 		if activePlan, err := s.planManager.GetActivePlan(feature.ID); err == nil {
 			planSteps, _ := s.planManager.GetPlanSteps(activePlan.ID)
 			for _, st := range planSteps {
-				check := "[ ]"
-				if st.Status == "completed" {
-					check = "[x]"
-				} else if st.Status == "in_progress" {
-					check = "[-]"
+				check := map[string]string{"completed": "[x]", "in_progress": "[-]"}[st.Status]
+				if check == "" {
+					check = "[ ]"
 				}
 				fmt.Fprintf(&b, "- %s %s\n", check, st.Title)
 			}
@@ -707,7 +674,6 @@ func (s *DevMemServer) exportJSON(feature *memory.Feature, ctx *memory.Context) 
 		len(ctx.RecentCommits), len(ctx.RecentNotes), len(ctx.ActiveFacts), len(ctx.SessionHistory))
 }
 
-// writeNoteSection writes a markdown section header and note list to b.
 func writeNoteSection(b *strings.Builder, title, emptyMsg string, notes []memory.Note) {
 	fmt.Fprintf(b, "## %s\n\n", title)
 	if len(notes) == 0 {
@@ -719,7 +685,6 @@ func writeNoteSection(b *strings.Builder, title, emptyMsg string, notes []memory
 	b.WriteString("\n")
 }
 
-// writeContextSection writes a compact "Title: item1; item2;" line, skipped if empty.
 func writeContextSection[T any](b *strings.Builder, title string, items []T, format func(T) string) {
 	if len(items) == 0 {
 		return
@@ -731,7 +696,6 @@ func writeContextSection[T any](b *strings.Builder, title string, items []T, for
 	b.WriteString("\n")
 }
 
-// formatContext formats a Context struct into compact text.
 func formatContext(ctx *memory.Context) string {
 	var b strings.Builder
 	if ctx.Feature != nil {
@@ -777,7 +741,6 @@ func formatContext(ctx *memory.Context) string {
 	return b.String()
 }
 
-// truncate returns the first n characters of s (newlines replaced) with "..." if truncated.
 func truncate(s string, n int) string {
 	s = strings.ReplaceAll(s, "\n", " ")
 	if len(s) <= n {
@@ -786,7 +749,6 @@ func truncate(s string, n int) string {
 	return s[:n] + "..."
 }
 
-// countCompleted counts the number of steps with status "completed".
 func countCompleted(steps []plans.PlanStep) int {
 	n := 0
 	for _, st := range steps {
@@ -797,7 +759,6 @@ func countCompleted(steps []plans.PlanStep) int {
 	return n
 }
 
-// resolveFeatureID resolves an optional feature name to an ID; empty name means no filter.
 func (s *DevMemServer) resolveFeatureID(name string) (string, *mcplib.CallToolResult) {
 	if name == "" {
 		return "", nil
@@ -809,7 +770,6 @@ func (s *DevMemServer) resolveFeatureID(name string) (string, *mcplib.CallToolRe
 	return f.ID, nil
 }
 
-// handleAnalytics implements devmem_analytics.
 func (s *DevMemServer) handleAnalytics(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	featureName := getStringArg(req, "feature", "")
 	if featureName != "" {
@@ -890,7 +850,6 @@ func (s *DevMemServer) handleProjectAnalytics() (*mcplib.CallToolResult, error) 
 	return mcplib.NewToolResultText(b.String()), nil
 }
 
-// handleHealth implements devmem_health.
 func (s *DevMemServer) handleHealth(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	featureName := getStringArg(req, "feature", "")
 	featureID, errRes := s.resolveFeatureID(featureName)
@@ -931,7 +890,6 @@ func (s *DevMemServer) handleHealth(_ context.Context, req mcplib.CallToolReques
 	return mcplib.NewToolResultText(b.String()), nil
 }
 
-// handleForget implements devmem_forget.
 func (s *DevMemServer) handleForget(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	what, errRes := requireParam(req, "what")
 	if errRes != nil {
@@ -970,7 +928,6 @@ func (s *DevMemServer) handleForget(_ context.Context, req mcplib.CallToolReques
 	}
 }
 
-// handleGenerateRules implements devmem_generate_rules.
 func (s *DevMemServer) handleGenerateRules(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	output := getStringArg(req, "output", "")
 	dryRun := getBoolArg(req, "dry_run", false)
@@ -991,10 +948,6 @@ func (s *DevMemServer) handleGenerateRules(_ context.Context, req mcplib.CallToo
 	return respond("Generated %s from memory.\n\n%s", output, content)
 }
 
-// --- briefing (merged from briefing.go) ---
-
-// formatBriefing generates a concise "welcome back" briefing for stderr output
-// and the devmem_briefing tool.
 func formatBriefing(ctx *memory.Context, feature *memory.Feature) string {
 	if feature == nil {
 		return "devmem: No active feature. Use devmem_start_feature to begin."
@@ -1023,12 +976,10 @@ func formatBriefing(ctx *memory.Context, feature *memory.Feature) string {
 	return strings.Join(lines, "\n")
 }
 
-// formatTimeAgo converts a datetime string to a human-readable "X ago" format.
 func formatTimeAgo(datetime string) string {
 	t, err := time.Parse(time.DateTime, datetime)
 	if err != nil {
-		t, err = time.Parse(time.RFC3339, datetime)
-		if err != nil {
+		if t, err = time.Parse(time.RFC3339, datetime); err != nil {
 			return datetime
 		}
 	}
@@ -1037,27 +988,14 @@ func formatTimeAgo(datetime string) string {
 	case d < time.Minute:
 		return "just now"
 	case d < time.Hour:
-		if m := int(d.Minutes()); m == 1 {
-			return "1m ago"
-		} else {
-			return fmt.Sprintf("%dm ago", m)
-		}
+		return fmt.Sprintf("%dm ago", int(d.Minutes()))
 	case d < 24*time.Hour:
-		if h := int(d.Hours()); h == 1 {
-			return "1h ago"
-		} else {
-			return fmt.Sprintf("%dh ago", h)
-		}
+		return fmt.Sprintf("%dh ago", int(d.Hours()))
 	default:
-		if days := int(d.Hours() / 24); days == 1 {
-			return "1d ago"
-		} else {
-			return fmt.Sprintf("%dd ago", days)
-		}
+		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
 	}
 }
 
-// handleBriefing implements the devmem_briefing tool.
 func (s *DevMemServer) handleBriefing(_ context.Context, _ mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	feature, err := s.store.GetActiveFeature()
 	if err != nil {

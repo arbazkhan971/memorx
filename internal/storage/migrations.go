@@ -6,7 +6,6 @@ import (
 	"strings"
 )
 
-// Migrate applies all pending schema migrations.
 func Migrate(db *DB) error {
 	w := db.Writer()
 
@@ -61,7 +60,6 @@ func applyV2(w *sql.DB) error {
 	}
 	defer tx.Rollback()
 
-	// Add summary column to sessions table (idempotent: ignore "duplicate column" error).
 	_, err = tx.Exec(`ALTER TABLE sessions ADD COLUMN summary TEXT DEFAULT ''`)
 	if err != nil && !strings.Contains(err.Error(), "duplicate column") {
 		return fmt.Errorf("add summary column: %w", err)
@@ -74,9 +72,6 @@ func applyV2(w *sql.DB) error {
 	return tx.Commit()
 }
 
-// execStatements splits sql by ";" and executes each statement.
-// If ignoreExists is true, "already exists" errors are silently skipped
-// (needed for FTS5 virtual tables which don't support IF NOT EXISTS).
 func execStatements(tx *sql.Tx, schema string, ignoreExists bool) error {
 	for _, stmt := range strings.Split(schema, ";") {
 		stmt = strings.TrimSpace(stmt)

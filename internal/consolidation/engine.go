@@ -140,7 +140,6 @@ func (e *Engine) GetState() (*ConsolidationState, error) {
 	return state, nil
 }
 
-// calculateEntropy: weighted sum of unsummarized ratio (0.4), conflict ratio (0.3), time ratio (0.3), each capped at 1.0.
 func (e *Engine) calculateEntropy() (float64, error) {
 	unsummarized, err := e.countUnsummarized()
 	if err != nil {
@@ -213,7 +212,6 @@ func (e *Engine) getFeatureIDs() ([]string, error) {
 	return ids, rows.Err()
 }
 
-// ApplyDecay counts notes older than 30 days with no outgoing links.
 func (e *Engine) ApplyDecay() (int, error) {
 	var count int
 	err := e.db.Reader().QueryRow(

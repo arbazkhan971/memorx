@@ -9,7 +9,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// DiscoverLinks finds notes with no outgoing links and creates "related" links via FTS.
 func (e *Engine) DiscoverLinks() (int, error) {
 	rows, err := e.db.Reader().Query(
 		`SELECT n.id, n.content FROM notes n LEFT JOIN memory_links ml ON ml.source_id=n.id AND ml.source_type='note' WHERE ml.id IS NULL`,
@@ -99,8 +98,5 @@ func (e *Engine) createLink(sourceID, sourceType, targetID, targetType, relation
 		`INSERT OR IGNORE INTO memory_links (id, source_id, source_type, target_id, target_type, relationship, strength, created_at) VALUES (?,?,?,?,?,?,?,?)`,
 		uuid.New().String(), sourceID, sourceType, targetID, targetType, relationship, strength, time.Now().UTC().Format(time.DateTime),
 	)
-	if err != nil {
-		return fmt.Errorf("create link: %w", err)
-	}
-	return nil
+	return err
 }

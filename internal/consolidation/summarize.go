@@ -17,7 +17,6 @@ type summaryRecord struct {
 	id, content, coversFrom, coversTo string
 }
 
-// GenerateSummaries creates heuristic summaries for a feature's unsummarized notes.
 func (e *Engine) GenerateSummaries(featureID string) (int, error) {
 	summariesCreated := 0
 	scope := "feature:" + featureID

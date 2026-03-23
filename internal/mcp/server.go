@@ -12,7 +12,6 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 )
 
-// DevMemServer wraps the MCP server with devmem-specific state.
 type DevMemServer struct {
 	store            *memory.Store
 	searchEngine     *search.Engine
@@ -22,7 +21,6 @@ type DevMemServer struct {
 	currentSessionID string
 }
 
-// NewServer creates a new DevMemServer backed by the given database and git root.
 func NewServer(db *storage.DB, gitRoot string) *DevMemServer {
 	return &DevMemServer{
 		store:        memory.NewStore(db),
@@ -33,9 +31,6 @@ func NewServer(db *storage.DB, gitRoot string) *DevMemServer {
 	}
 }
 
-// Start initializes the MCP server, registers tools and resources,
-// creates a session under the active feature (if any), and starts
-// serving via stdio transport.
 func (s *DevMemServer) Start() error {
 	srv := server.NewMCPServer("devmem", "1.0.0")
 	s.registerTools(srv)
@@ -46,10 +41,8 @@ func (s *DevMemServer) Start() error {
 			s.currentSessionID = sess.ID
 		}
 
-		// Auto-inject context briefing to stderr so the LLM sees it on connect
 		ctxData, err := s.store.GetContext(feature.ID, "standard", nil)
 		if err == nil {
-			// Load session history for the briefing
 			sessions, _ := s.store.ListSessions(feature.ID, 5)
 			ctxData.SessionHistory = sessions
 			briefing := formatBriefing(ctxData, feature)
@@ -61,7 +54,6 @@ func (s *DevMemServer) Start() error {
 	return server.ServeStdio(srv)
 }
 
-// registerTools registers all tool handlers on the MCP server.
 func (s *DevMemServer) registerTools(srv *server.MCPServer) {
 	srv.AddTools(
 		server.ServerTool{
@@ -198,7 +190,6 @@ func (s *DevMemServer) registerTools(srv *server.MCPServer) {
 	)
 }
 
-// registerResources registers MCP resources.
 func (s *DevMemServer) registerResources(srv *server.MCPServer) {
 	srv.AddResources(
 		server.ServerResource{

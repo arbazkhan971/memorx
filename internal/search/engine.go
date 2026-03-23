@@ -10,7 +10,6 @@ import (
 	"github.com/arbaz/devmem/internal/storage"
 )
 
-// SearchResult represents a single result from the search engine.
 type SearchResult struct {
 	ID          string
 	Type        string
@@ -20,17 +19,14 @@ type SearchResult struct {
 	CreatedAt   string
 }
 
-// Engine orchestrates the 3-layer search: FTS5 BM25 -> trigram.
 type Engine struct {
 	db *storage.DB
 }
 
-// NewEngine creates a new search engine backed by the given database.
 func NewEngine(db *storage.DB) *Engine {
 	return &Engine{db: db}
 }
 
-// LinkedMemory represents a memory item discovered via link traversal.
 type LinkedMemory struct {
 	ID           string
 	Type         string
@@ -39,19 +35,10 @@ type LinkedMemory struct {
 	Depth        int
 }
 
-// ftsTable describes how to search a single FTS5 (or trigram) virtual table.
 type ftsTable struct {
-	typeName    string // search type key: "notes", "commits", "facts", "plans"
-	resultType  string // result Type field: "note", "commit", "fact", "plan"
-	ftsName     string // virtual table name: "notes_fts", "commits_fts", etc.
-	sourceTable string // source table: "notes", "commits", "facts", "plans"
-	alias       string // SQL alias for the source table
-	contentExpr string // SQL expression for the content column (uses alias)
-	typeExpr    string // SQL expression for the type/subtype column (uses alias)
-	timeCol     string // column name for timestamp (uses alias)
-	featureCol  string // column for feature_id filter (uses alias)
-	sourceType  string // source_type value for memory_links count
-	trigramName string // trigram virtual table name, empty if none
+	typeName, resultType, ftsName, sourceTable, alias string
+	contentExpr, typeExpr, timeCol, featureCol        string
+	sourceType, trigramName                           string
 }
 
 var ftsTables = []ftsTable{
@@ -83,7 +70,6 @@ var ftsTables = []ftsTable{
 	},
 }
 
-// ftsTableMap provides O(1) lookup by typeName.
 var ftsTableMap = func() map[string]*ftsTable {
 	m := make(map[string]*ftsTable, len(ftsTables))
 	for i := range ftsTables {
@@ -92,7 +78,6 @@ var ftsTableMap = func() map[string]*ftsTable {
 	return m
 }()
 
-// typeWeights maps note/commit types to relevance multipliers.
 var typeWeights = map[string]float64{
 	"decision":  2.0,
 	"blocker":   1.5,
@@ -102,16 +87,6 @@ var typeWeights = map[string]float64{
 	"next_step": 1.0,
 }
 
-// Search executes a multi-layer search across memory types.
-//
-// query: the search text
-// scope: "current_feature" to filter by featureID, or "all_features" for no filter
-// types: which memory types to search (e.g. ["notes", "commits", "facts", "plans"]).
-//
-//	If empty, searches all types.
-//
-// featureID: required when scope is "current_feature"
-// limit: max results to return (0 = default 20)
 func (e *Engine) Search(query, scope string, types []string, featureID string, limit int) ([]SearchResult, error) {
 	if limit <= 0 {
 		limit = 20
@@ -120,11 +95,7 @@ func (e *Engine) Search(query, scope string, types []string, featureID string, l
 		types = []string{"notes", "commits", "facts", "plans"}
 	}
 
-	// Sanitize query for FTS5 MATCH: wrap individual tokens in double quotes
-	// to avoid FTS5 syntax errors from special characters.
 	ftsQuery := sanitizeFTSQuery(query)
-
-	// Layer 1: FTS5 + BM25
 	results, err := e.searchLayer(ftsQuery, scope, types, featureID, limit, false)
 	if err != nil {
 		return nil, fmt.Errorf("fts search: %w", err)
@@ -133,7 +104,6 @@ func (e *Engine) Search(query, scope string, types []string, featureID string, l
 		return results, nil
 	}
 
-	// Layer 2: Trigram substring
 	results, err = e.searchLayer(query, scope, types, featureID, limit, true)
 	if err != nil {
 		return nil, fmt.Errorf("trigram search: %w", err)
@@ -141,12 +111,9 @@ func (e *Engine) Search(query, scope string, types []string, featureID string, l
 	return results, nil
 }
 
-// sanitizeFTSQuery wraps each token in double quotes so that special characters
-// (colons, hyphens, etc.) don't break FTS5 MATCH syntax.
 func sanitizeFTSQuery(query string) string {
 	tokens := strings.Fields(query)
 	for i, t := range tokens {
-		// Remove any existing quotes and re-wrap
 		t = strings.ReplaceAll(t, "\"", "")
 		if t != "" {
 			tokens[i] = "\"" + t + "\""
@@ -155,7 +122,6 @@ func sanitizeFTSQuery(query string) string {
 	return strings.Join(tokens, " ")
 }
 
-// searchLayer runs either FTS5 or trigram queries across requested types.
 func (e *Engine) searchLayer(matchQuery, scope string, types []string, featureID string, limit int, trigram bool) ([]SearchResult, error) {
 	reader := e.db.Reader()
 	var allResults []SearchResult
@@ -179,17 +145,14 @@ func (e *Engine) searchLayer(matchQuery, scope string, types []string, featureID
 	return allResults, nil
 }
 
-// searchTable executes a single FTS5 or trigram query for one table definition.
 func (e *Engine) searchTable(reader *sql.DB, tbl *ftsTable, matchQuery, scope, featureID string, trigram bool) ([]SearchResult, error) {
 	vtable := tbl.ftsName
 	if trigram {
 		if tbl.trigramName == "" {
-			return nil, nil // this type has no trigram table
+			return nil, nil
 		}
 		vtable = tbl.trigramName
 	}
-
-	// Build SELECT columns: id, content, subtype, timestamp, feature_name, [rank,] link_count
 	rankCol := ""
 	if !trigram {
 		rankCol = fmt.Sprintf(",\n       bm25(%s) as rank", vtable)
@@ -248,7 +211,6 @@ WHERE %s MATCH ?`,
 	return results, rows.Err()
 }
 
-// sortByRelevance sorts results in descending order of relevance.
 func sortByRelevance(results []SearchResult) {
 	for i := 1; i < len(results); i++ {
 		for j := i; j > 0 && results[j].Relevance > results[j-1].Relevance; j-- {
@@ -257,8 +219,6 @@ func sortByRelevance(results []SearchResult) {
 	}
 }
 
-// TraverseLinks follows memory_links from a starting memory, using a recursive
-// CTE to discover connected items up to maxDepth hops away.
 func (e *Engine) TraverseLinks(memoryID, memoryType string, maxDepth int) ([]LinkedMemory, error) {
 	if maxDepth < 1 {
 		maxDepth = 1
@@ -297,14 +257,6 @@ ORDER BY depth, strength DESC
 	return results, rows.Err()
 }
 
-// Score computes a composite relevance score for a search result.
-//
-// Formula: score = bm25Score * temporalDecay * typeWeight * linkBoost
-//
-// bm25Score should be the absolute (positive) BM25 value.
-// createdAt is an RFC3339/datetime string.
-// noteType is the type column value (e.g. "decision", "blocker", "progress", "note").
-// linkCount is the number of memory_links referencing this item.
 func Score(bm25Score float64, createdAt string, noteType string, linkCount int) float64 {
 	decay := temporalDecay(createdAt)
 	weight := typeWeight(noteType)
@@ -312,14 +264,10 @@ func Score(bm25Score float64, createdAt string, noteType string, linkCount int) 
 	return bm25Score * decay * weight * boost
 }
 
-// temporalDecay returns an exponential decay factor with a 14-day half-life.
-// Items created now return ~1.0; items 14 days old return ~0.5.
 func temporalDecay(createdAt string) float64 {
 	t, err := time.Parse("2006-01-02 15:04:05", createdAt)
 	if err != nil {
-		// Try RFC3339 as fallback
-		t, err = time.Parse(time.RFC3339, createdAt)
-		if err != nil {
+		if t, err = time.Parse(time.RFC3339, createdAt); err != nil {
 			return 1.0
 		}
 	}
@@ -330,7 +278,6 @@ func temporalDecay(createdAt string) float64 {
 	return math.Exp(-0.693 * days / 14.0)
 }
 
-// typeWeight returns a relevance multiplier based on the memory type.
 func typeWeight(noteType string) float64 {
 	if w, ok := typeWeights[noteType]; ok {
 		return w
@@ -338,7 +285,6 @@ func typeWeight(noteType string) float64 {
 	return 1.0
 }
 
-// linkBoost returns a boost factor based on how connected an item is.
 func linkBoost(linkCount int) float64 {
 	return 1.0 + float64(linkCount)*0.1
 }

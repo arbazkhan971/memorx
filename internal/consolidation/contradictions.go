@@ -5,10 +5,8 @@ import (
 	"time"
 )
 
-// Shared SQL for counting conflict groups (used by both countConflicts and DetectContradictions).
 const conflictGroupsSQL = `SELECT COUNT(*) FROM (SELECT subject, predicate FROM facts WHERE invalid_at IS NULL GROUP BY subject, predicate HAVING COUNT(*)>1)`
 
-// DetectContradictions resolves facts with duplicate subject+predicate by keeping only the most recent.
 func (e *Engine) DetectContradictions() (int, error) {
 	rows, err := e.db.Reader().Query(
 		`SELECT subject, predicate FROM facts WHERE invalid_at IS NULL GROUP BY subject, predicate HAVING COUNT(*)>1`,
