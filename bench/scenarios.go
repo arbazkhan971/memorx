@@ -2,6 +2,53 @@ package bench
 
 import "strings"
 
+// --- Action/Query builder helpers (reduce map[string]interface{} verbosity) ---
+
+type params = map[string]interface{}
+
+func startFeature(name string) Action          { return Action{Tool: "start_feature", Params: params{"name": name}} }
+func startFeatureDesc(name, desc string) Action { return Action{Tool: "start_feature", Params: params{"name": name, "description": desc}} }
+func note(content, typ string) Action           { return Action{Tool: "remember", Params: params{"content": content, "type": typ}} }
+func noteForFeature(feature, content, typ string) Action { return Action{Tool: "remember", Params: params{"feature": feature, "content": content, "type": typ}} }
+func fact(subj, pred, obj string) Action        { return Action{Tool: "add_fact", Params: params{"subject": subj, "predicate": pred, "object": obj}} }
+func endSess() Action                           { return Action{Tool: "end_session", Params: params{}} }
+func startSess(feature string) Action           { return Action{Tool: "start_session", Params: params{"feature": feature}} }
+func startSessTool(feature, tool string) Action { return Action{Tool: "start_session", Params: params{"feature": feature, "tool": tool}} }
+
+func savePlan(title, content string, stepTitles ...string) Action {
+	steps := make([]interface{}, len(stepTitles))
+	for i, t := range stepTitles {
+		steps[i] = params{"title": t}
+	}
+	return Action{Tool: "save_plan", Params: params{"title": title, "content": content, "steps": steps}}
+}
+
+func savePlanFor(feature, title, content string, stepTitles ...string) Action {
+	a := savePlan(title, content, stepTitles...)
+	a.Params["feature"] = feature
+	return a
+}
+
+func ctxQuery(feature, tier string) Query  { return Query{Tool: "get_context", Params: params{"feature": feature, "tier": tier}} }
+func factsQuery(feature string) Query      { return Query{Tool: "get_facts", Params: params{"feature": feature}} }
+func listFeaturesQuery() Query             { return Query{Tool: "list_features", Params: params{}} }
+
+func searchQ(query, scope, feature string) Query {
+	return Query{Tool: "search", Params: params{"query": query, "scope": scope, "feature": feature}}
+}
+
+func searchAll(query string) Query {
+	return Query{Tool: "search", Params: params{"query": query, "scope": "all_features"}}
+}
+
+func searchTyped(query, scope, feature string, types []interface{}) Query {
+	return Query{Tool: "search", Params: params{"query": query, "scope": scope, "feature": feature, "types": types}}
+}
+
+func searchAllTyped(query string, types []interface{}) Query {
+	return Query{Tool: "search", Params: params{"query": query, "scope": "all_features", "types": types}}
+}
+
 // AllScenarios returns all 70 benchmark scenarios across 7 abilities.
 func AllScenarios() []Scenario {
 	var all []Scenario
@@ -28,271 +75,201 @@ func ScenariosByAbility(ability string) []Scenario {
 
 // ---------------------------------------------------------------------------
 // Ability 1: Session Continuity (15 scenarios)
-// Test: can devmem recall what happened in past sessions?
 // ---------------------------------------------------------------------------
 
 func sessionContinuityScenarios() []Scenario {
+	const a = "session_continuity"
 	return []Scenario{
 		{
-			ID:          "sc-001",
-			Ability:     "session_continuity",
+			ID: "sc-001", Ability: a,
 			Description: "Start feature, add 3 progress notes, query context — must contain all notes",
 			Setup: []Action{
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "auth-system", "description": "Build authentication system"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Set up JWT token generation with RS256 signing", "type": "progress"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Implemented refresh token rotation logic", "type": "progress"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Added rate limiting to login endpoint", "type": "progress"}},
+				startFeatureDesc("auth-system", "Build authentication system"),
+				note("Set up JWT token generation with RS256 signing", "progress"),
+				note("Implemented refresh token rotation logic", "progress"),
+				note("Added rate limiting to login endpoint", "progress"),
 			},
-			Query: Query{
-				Tool:   "get_context",
-				Params: map[string]interface{}{"feature": "auth-system", "tier": "standard"},
-			},
+			Query:            ctxQuery("auth-system", "standard"),
 			ExpectedContains: []string{"JWT token", "refresh token rotation", "rate limiting"},
 		},
 		{
-			ID:          "sc-002",
-			Ability:     "session_continuity",
+			ID: "sc-002", Ability: a,
 			Description: "Start feature, add decision + blocker, query context — must contain both",
 			Setup: []Action{
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "payment-service"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Decided to use Stripe over PayPal for payment processing", "type": "decision"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Blocked on Stripe API key provisioning from finance team", "type": "blocker"}},
+				startFeature("payment-service"),
+				note("Decided to use Stripe over PayPal for payment processing", "decision"),
+				note("Blocked on Stripe API key provisioning from finance team", "blocker"),
 			},
-			Query: Query{
-				Tool:   "get_context",
-				Params: map[string]interface{}{"feature": "payment-service", "tier": "standard"},
-			},
+			Query:            ctxQuery("payment-service", "standard"),
 			ExpectedContains: []string{"Stripe", "blocker", "decision"},
 		},
 		{
-			ID:          "sc-003",
-			Ability:     "session_continuity",
+			ID: "sc-003", Ability: a,
 			Description: "Start 2 sessions (end first), query context — must show session history",
 			Setup: []Action{
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "api-gateway"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Started designing the routing layer", "type": "progress"}},
-				{Tool: "end_session", Params: map[string]interface{}{}},
-				{Tool: "start_session", Params: map[string]interface{}{"feature": "api-gateway", "tool": "benchmark-session-2"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Continued with middleware chain implementation", "type": "progress"}},
+				startFeature("api-gateway"),
+				note("Started designing the routing layer", "progress"),
+				endSess(),
+				startSessTool("api-gateway", "benchmark-session-2"),
+				note("Continued with middleware chain implementation", "progress"),
 			},
-			Query: Query{
-				Tool:   "get_context",
-				Params: map[string]interface{}{"feature": "api-gateway", "tier": "detailed"},
-			},
+			Query:            ctxQuery("api-gateway", "detailed"),
 			ExpectedContains: []string{"Sessions:", "routing layer", "middleware chain"},
 		},
 		{
-			ID:          "sc-004",
-			Ability:     "session_continuity",
+			ID: "sc-004", Ability: a,
 			Description: "Add progress across 3 sessions, query detailed context — all progress visible",
 			Setup: []Action{
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "data-pipeline"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Session 1: Set up Kafka consumer group", "type": "progress"}},
-				{Tool: "end_session", Params: map[string]interface{}{}},
-				{Tool: "start_session", Params: map[string]interface{}{"feature": "data-pipeline"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Session 2: Implemented Avro schema validation", "type": "progress"}},
-				{Tool: "end_session", Params: map[string]interface{}{}},
-				{Tool: "start_session", Params: map[string]interface{}{"feature": "data-pipeline"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Session 3: Added dead letter queue for failed messages", "type": "progress"}},
+				startFeature("data-pipeline"),
+				note("Session 1: Set up Kafka consumer group", "progress"),
+				endSess(),
+				startSess("data-pipeline"),
+				note("Session 2: Implemented Avro schema validation", "progress"),
+				endSess(),
+				startSess("data-pipeline"),
+				note("Session 3: Added dead letter queue for failed messages", "progress"),
 			},
-			Query: Query{
-				Tool:   "get_context",
-				Params: map[string]interface{}{"feature": "data-pipeline", "tier": "detailed"},
-			},
+			Query:            ctxQuery("data-pipeline", "detailed"),
 			ExpectedContains: []string{"Kafka consumer", "Avro schema", "dead letter queue"},
 		},
 		{
-			ID:          "sc-005",
-			Ability:     "session_continuity",
+			ID: "sc-005", Ability: a,
 			Description: "Start feature with description, query status — description returned",
 			Setup: []Action{
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "cache-layer", "description": "Redis-backed caching layer for API responses with TTL-based invalidation"}},
+				startFeatureDesc("cache-layer", "Redis-backed caching layer for API responses with TTL-based invalidation"),
 			},
-			Query: Query{
-				Tool:   "get_context",
-				Params: map[string]interface{}{"feature": "cache-layer", "tier": "compact"},
-			},
+			Query:            ctxQuery("cache-layer", "compact"),
 			ExpectedContains: []string{"cache-layer", "active"},
 		},
 		{
-			ID:          "sc-006",
-			Ability:     "session_continuity",
+			ID: "sc-006", Ability: a,
 			Description: "Add 10 notes, query compact context — only recent notes (not all)",
 			Setup: []Action{
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "logging-system"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Note 1: Set up structured logging", "type": "note"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Note 2: Added log levels", "type": "note"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Note 3: Configured log rotation", "type": "note"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Note 4: Added request ID tracing", "type": "note"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Note 5: Integrated with ELK stack", "type": "note"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Note 6: Added performance metrics", "type": "note"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Note 7: Set up alerting rules", "type": "note"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Note 8: Added audit logging", "type": "note"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Note 9: Implemented log sampling", "type": "note"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Note 10: Final cleanup of log formats", "type": "note"}},
+				startFeature("logging-system"),
+				note("Note 1: Set up structured logging", "note"),
+				note("Note 2: Added log levels", "note"),
+				note("Note 3: Configured log rotation", "note"),
+				note("Note 4: Added request ID tracing", "note"),
+				note("Note 5: Integrated with ELK stack", "note"),
+				note("Note 6: Added performance metrics", "note"),
+				note("Note 7: Set up alerting rules", "note"),
+				note("Note 8: Added audit logging", "note"),
+				note("Note 9: Implemented log sampling", "note"),
+				note("Note 10: Final cleanup of log formats", "note"),
 			},
-			Query: Query{
-				Tool:   "get_context",
-				Params: map[string]interface{}{"feature": "logging-system", "tier": "compact"},
-			},
-			// Compact tier returns only commits (1 max), no notes — so individual notes should NOT appear
+			Query:              ctxQuery("logging-system", "compact"),
 			ExpectedNotContain: []string{"Note 1:", "Note 2:", "Note 3:"},
 		},
 		{
-			ID:          "sc-007",
-			Ability:     "session_continuity",
+			ID: "sc-007", Ability: a,
 			Description: "End session, start new, query — must show where I left off",
 			Setup: []Action{
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "user-profiles"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Implemented avatar upload with S3 presigned URLs", "type": "progress"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Next: implement profile settings page", "type": "next_step"}},
-				{Tool: "end_session", Params: map[string]interface{}{}},
-				{Tool: "start_session", Params: map[string]interface{}{"feature": "user-profiles"}},
+				startFeature("user-profiles"),
+				note("Implemented avatar upload with S3 presigned URLs", "progress"),
+				note("Next: implement profile settings page", "next_step"),
+				endSess(),
+				startSess("user-profiles"),
 			},
-			Query: Query{
-				Tool:   "get_context",
-				Params: map[string]interface{}{"feature": "user-profiles", "tier": "standard"},
-			},
+			Query:            ctxQuery("user-profiles", "standard"),
 			ExpectedContains: []string{"avatar upload", "profile settings"},
 		},
 		{
-			ID:          "sc-008",
-			Ability:     "session_continuity",
+			ID: "sc-008", Ability: a,
 			Description: "Multiple features, switch between them, query — correct feature context",
 			Setup: []Action{
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "feature-alpha"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Alpha: implemented the widget renderer", "type": "progress"}},
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "feature-beta"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Beta: set up the notification service", "type": "progress"}},
-				// Switch back to alpha
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "feature-alpha"}},
+				startFeature("feature-alpha"),
+				note("Alpha: implemented the widget renderer", "progress"),
+				startFeature("feature-beta"),
+				note("Beta: set up the notification service", "progress"),
+				startFeature("feature-alpha"),
 			},
-			Query: Query{
-				Tool:   "get_context",
-				Params: map[string]interface{}{"feature": "feature-alpha", "tier": "standard"},
-			},
+			Query:              ctxQuery("feature-alpha", "standard"),
 			ExpectedContains:   []string{"widget renderer"},
 			ExpectedNotContain: []string{"notification service"},
 		},
 		{
-			ID:          "sc-009",
-			Ability:     "session_continuity",
+			ID: "sc-009", Ability: a,
 			Description: "Feature with branch name, query — branch shown",
 			Setup: []Action{
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "search-feature"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Working on full-text search with FTS5", "type": "progress"}},
+				startFeature("search-feature"),
+				note("Working on full-text search with FTS5", "progress"),
 			},
-			Query: Query{
-				Tool:   "get_context",
-				Params: map[string]interface{}{"feature": "search-feature", "tier": "standard"},
-			},
-			// Branch is auto-detected from git. In benchmark mode there's no git, so we just check feature name is present.
+			Query:            ctxQuery("search-feature", "standard"),
 			ExpectedContains: []string{"search-feature", "full-text search"},
 		},
 		{
-			ID:          "sc-010",
-			Ability:     "session_continuity",
+			ID: "sc-010", Ability: a,
 			Description: "5 progress notes then 1 decision, query — decision appears in context",
 			Setup: []Action{
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "db-migration"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Progress: analyzed current schema", "type": "progress"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Progress: identified foreign key constraints", "type": "progress"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Progress: wrote migration script draft", "type": "progress"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Progress: tested on staging database", "type": "progress"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Progress: verified data integrity checks", "type": "progress"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Decided to use blue-green deployment for zero-downtime migration", "type": "decision"}},
+				startFeature("db-migration"),
+				note("Progress: analyzed current schema", "progress"),
+				note("Progress: identified foreign key constraints", "progress"),
+				note("Progress: wrote migration script draft", "progress"),
+				note("Progress: tested on staging database", "progress"),
+				note("Progress: verified data integrity checks", "progress"),
+				note("Decided to use blue-green deployment for zero-downtime migration", "decision"),
 			},
-			Query: Query{
-				Tool:   "get_context",
-				Params: map[string]interface{}{"feature": "db-migration", "tier": "detailed"},
-			},
+			Query:            ctxQuery("db-migration", "detailed"),
 			ExpectedContains: []string{"blue-green deployment"},
 		},
 		{
-			ID:          "sc-011",
-			Ability:     "session_continuity",
+			ID: "sc-011", Ability: a,
 			Description: "Add next_step notes, query — next steps shown",
 			Setup: []Action{
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "ci-pipeline"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Next step: configure GitHub Actions workflow", "type": "next_step"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Next step: add integration test stage", "type": "next_step"}},
+				startFeature("ci-pipeline"),
+				note("Next step: configure GitHub Actions workflow", "next_step"),
+				note("Next step: add integration test stage", "next_step"),
 			},
-			Query: Query{
-				Tool:   "get_context",
-				Params: map[string]interface{}{"feature": "ci-pipeline", "tier": "standard"},
-			},
+			Query:            ctxQuery("ci-pipeline", "standard"),
 			ExpectedContains: []string{"GitHub Actions", "integration test"},
 		},
 		{
-			ID:          "sc-012",
-			Ability:     "session_continuity",
+			ID: "sc-012", Ability: a,
 			Description: "Empty feature (no notes), query — graceful empty response",
 			Setup: []Action{
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "empty-feature"}},
+				startFeature("empty-feature"),
 			},
-			Query: Query{
-				Tool:   "get_context",
-				Params: map[string]interface{}{"feature": "empty-feature", "tier": "standard"},
-			},
-			ExpectedContains: []string{"empty-feature"},
-			// Should NOT contain any notes section content
+			Query:              ctxQuery("empty-feature", "standard"),
+			ExpectedContains:   []string{"empty-feature"},
 			ExpectedNotContain: []string{"Notes:"},
 		},
 		{
-			ID:          "sc-013",
-			Ability:     "session_continuity",
+			ID: "sc-013", Ability: a,
 			Description: "Feature with only facts, query — facts shown in context",
 			Setup: []Action{
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "infra-config"}},
-				{Tool: "add_fact", Params: map[string]interface{}{"subject": "database", "predicate": "uses", "object": "PostgreSQL 15"}},
-				{Tool: "add_fact", Params: map[string]interface{}{"subject": "cache", "predicate": "uses", "object": "Redis 7.2"}},
+				startFeature("infra-config"),
+				fact("database", "uses", "PostgreSQL 15"),
+				fact("cache", "uses", "Redis 7.2"),
 			},
-			Query: Query{
-				Tool:   "get_context",
-				Params: map[string]interface{}{"feature": "infra-config", "tier": "standard"},
-			},
+			Query:            ctxQuery("infra-config", "standard"),
 			ExpectedContains: []string{"PostgreSQL 15", "Redis 7.2"},
 		},
 		{
-			ID:          "sc-014",
-			Ability:     "session_continuity",
+			ID: "sc-014", Ability: a,
 			Description: "Very long note content (500+ chars), query — content present",
 			Setup: []Action{
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "long-note-feature"}},
-				{Tool: "remember", Params: map[string]interface{}{
-					"content": "This is a very detailed progress note about the implementation of the distributed " +
-						"consensus algorithm. We evaluated Raft and Paxos, ultimately choosing Raft for its " +
-						"understandability. The leader election mechanism uses randomized timeouts between " +
-						"150ms and 300ms. Log replication follows the standard approach with AppendEntries " +
-						"RPCs. We added a custom extension for read-only queries that bypasses the log " +
-						"replication path. Safety properties are verified using TLA+ model checking. The " +
-						"implementation handles network partitions gracefully with automatic leader stepdown " +
-						"when a majority of heartbeats are missed. Performance benchmarks show 50K writes/sec " +
-						"with 3 nodes and 5ms p99 latency. UNIQUE_MARKER_DISTRIBUTED_CONSENSUS_COMPLETE.",
-					"type": "progress",
-				}},
+				startFeature("long-note-feature"),
+				note("This is a very detailed progress note about the implementation of the distributed "+
+					"consensus algorithm. We evaluated Raft and Paxos, ultimately choosing Raft for its "+
+					"understandability. The leader election mechanism uses randomized timeouts between "+
+					"150ms and 300ms. Log replication follows the standard approach with AppendEntries "+
+					"RPCs. We added a custom extension for read-only queries that bypasses the log "+
+					"replication path. Safety properties are verified using TLA+ model checking. The "+
+					"implementation handles network partitions gracefully with automatic leader stepdown "+
+					"when a majority of heartbeats are missed. Performance benchmarks show 50K writes/sec "+
+					"with 3 nodes and 5ms p99 latency. UNIQUE_MARKER_DISTRIBUTED_CONSENSUS_COMPLETE.", "progress"),
 			},
-			Query: Query{
-				Tool:   "get_context",
-				Params: map[string]interface{}{"feature": "long-note-feature", "tier": "standard"},
-			},
+			Query:            ctxQuery("long-note-feature", "standard"),
 			ExpectedContains: []string{"UNIQUE_MARKER_DISTRIBUTED_CONSENSUS_COMPLETE"},
 		},
 		{
-			ID:          "sc-015",
-			Ability:     "session_continuity",
+			ID: "sc-015", Ability: a,
 			Description: "Unicode content in notes, query — preserved correctly",
 			Setup: []Action{
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "unicode-feature"}},
-				{Tool: "remember", Params: map[string]interface{}{
-					"content": "Implemented i18n support: Japanese (日本語テスト), Chinese (中文测试), emoji (🚀✅), and RTL Arabic (اختبار)",
-					"type":    "progress",
-				}},
+				startFeature("unicode-feature"),
+				note("Implemented i18n support: Japanese (日本語テスト), Chinese (中文测试), emoji (🚀✅), and RTL Arabic (اختبار)", "progress"),
 			},
-			Query: Query{
-				Tool:   "get_context",
-				Params: map[string]interface{}{"feature": "unicode-feature", "tier": "standard"},
-			},
+			Query:            ctxQuery("unicode-feature", "standard"),
 			ExpectedContains: []string{"日本語テスト", "中文测试", "اختبار"},
 		},
 	}
@@ -300,180 +277,140 @@ func sessionContinuityScenarios() []Scenario {
 
 // ---------------------------------------------------------------------------
 // Ability 2: Decision Recall (10 scenarios)
-// Test: can devmem find specific decisions?
 // ---------------------------------------------------------------------------
 
 func decisionRecallScenarios() []Scenario {
+	const a = "decision_recall"
 	return []Scenario{
 		{
-			ID:          "dr-001",
-			Ability:     "decision_recall",
+			ID: "dr-001", Ability: a,
 			Description: "Add 5 decisions, search for one by keyword — found",
 			Setup: []Action{
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "dr-feature-1"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Decided to use PostgreSQL for persistent storage", "type": "decision"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Decided to use Redis for session caching", "type": "decision"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Decided to use GraphQL instead of REST for the API", "type": "decision"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Decided to deploy on Kubernetes with Helm charts", "type": "decision"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Decided to use Terraform for infrastructure as code", "type": "decision"}},
+				startFeature("dr-feature-1"),
+				note("Decided to use PostgreSQL for persistent storage", "decision"),
+				note("Decided to use Redis for session caching", "decision"),
+				note("Decided to use GraphQL instead of REST for the API", "decision"),
+				note("Decided to deploy on Kubernetes with Helm charts", "decision"),
+				note("Decided to use Terraform for infrastructure as code", "decision"),
 			},
-			Query: Query{
-				Tool:   "search",
-				Params: map[string]interface{}{"query": "GraphQL API", "scope": "current_feature", "feature": "dr-feature-1"},
-			},
+			Query:            searchQ("GraphQL API", "current_feature", "dr-feature-1"),
 			ExpectedContains: []string{"GraphQL"},
 		},
 		{
-			ID:          "dr-002",
-			Ability:     "decision_recall",
+			ID: "dr-002", Ability: a,
 			Description: "Add decisions across 2 features, search in current — only current feature's",
 			Setup: []Action{
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "dr-frontend"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Decided to use React with TypeScript for the frontend", "type": "decision"}},
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "dr-backend"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Decided to use Go with Chi router for the backend", "type": "decision"}},
+				startFeature("dr-frontend"),
+				note("Decided to use React with TypeScript for the frontend", "decision"),
+				startFeature("dr-backend"),
+				note("Decided to use Go with Chi router for the backend", "decision"),
 			},
-			Query: Query{
-				Tool:   "search",
-				Params: map[string]interface{}{"query": "framework decision", "scope": "current_feature", "feature": "dr-backend"},
-			},
+			Query:              searchQ("framework decision", "current_feature", "dr-backend"),
 			ExpectedNotContain: []string{"React", "TypeScript"},
 		},
 		{
-			ID:          "dr-003",
-			Ability:     "decision_recall",
+			ID: "dr-003", Ability: a,
 			Description: "Add decisions across 2 features, search all — both found",
 			Setup: []Action{
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "dr-svc-a"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Decided to use gRPC for inter-service communication", "type": "decision"}},
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "dr-svc-b"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Decided to use gRPC streaming for real-time data", "type": "decision"}},
+				startFeature("dr-svc-a"),
+				note("Decided to use gRPC for inter-service communication", "decision"),
+				startFeature("dr-svc-b"),
+				note("Decided to use gRPC streaming for real-time data", "decision"),
 			},
-			Query: Query{
-				Tool:   "search",
-				Params: map[string]interface{}{"query": "gRPC", "scope": "all_features"},
-			},
+			Query:            searchAll("gRPC"),
 			ExpectedContains: []string{"gRPC"},
 		},
 		{
-			ID:          "dr-004",
-			Ability:     "decision_recall",
+			ID: "dr-004", Ability: a,
 			Description: "Search with partial word — trigram fallback finds it",
 			Setup: []Action{
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "dr-trigram"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Decided to use WebSocket protocol for bidirectional communication", "type": "decision"}},
+				startFeature("dr-trigram"),
+				note("Decided to use WebSocket protocol for bidirectional communication", "decision"),
 			},
-			Query: Query{
-				Tool:   "search",
-				Params: map[string]interface{}{"query": "WebSock", "scope": "current_feature", "feature": "dr-trigram"},
-			},
+			Query:            searchQ("WebSock", "current_feature", "dr-trigram"),
 			ExpectedContains: []string{"WebSocket"},
 		},
 		{
-			ID:          "dr-005",
-			Ability:     "decision_recall",
+			ID: "dr-005", Ability: a,
 			Description: "Add decision with technical terms, search — found",
 			Setup: []Action{
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "dr-technical"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Decided to use CQRS with event sourcing for the order management bounded context", "type": "decision"}},
+				startFeature("dr-technical"),
+				note("Decided to use CQRS with event sourcing for the order management bounded context", "decision"),
 			},
-			Query: Query{
-				Tool:   "search",
-				Params: map[string]interface{}{"query": "CQRS event sourcing", "scope": "current_feature", "feature": "dr-technical"},
-			},
+			Query:            searchQ("CQRS event sourcing", "current_feature", "dr-technical"),
 			ExpectedContains: []string{"CQRS", "event sourcing"},
 		},
 		{
-			ID:          "dr-006",
-			Ability:     "decision_recall",
+			ID: "dr-006", Ability: a,
 			Description: "Multiple decisions with similar keywords, search — most relevant first",
 			Setup: []Action{
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "dr-ranking"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Decided to use SQLite for local development database", "type": "decision"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Decided to use PostgreSQL for production database with read replicas", "type": "decision"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "The database schema uses UUID primary keys throughout", "type": "note"}},
+				startFeature("dr-ranking"),
+				note("Decided to use SQLite for local development database", "decision"),
+				note("Decided to use PostgreSQL for production database with read replicas", "decision"),
+				note("The database schema uses UUID primary keys throughout", "note"),
 			},
-			Query: Query{
-				Tool:   "search",
-				Params: map[string]interface{}{"query": "production database", "scope": "current_feature", "feature": "dr-ranking"},
-			},
+			Query:            searchQ("production database", "current_feature", "dr-ranking"),
 			ExpectedContains: []string{"PostgreSQL"},
 		},
 		{
-			ID:          "dr-007",
-			Ability:     "decision_recall",
+			ID: "dr-007", Ability: a,
 			Description: "Search for decision that doesn't exist — no results",
 			Setup: []Action{
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "dr-empty"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Decided to use Docker for containerization", "type": "decision"}},
+				startFeature("dr-empty"),
+				note("Decided to use Docker for containerization", "decision"),
 			},
-			Query: Query{
-				Tool:   "search",
-				Params: map[string]interface{}{"query": "quantum computing blockchain", "scope": "current_feature", "feature": "dr-empty"},
-			},
+			Query:            searchQ("quantum computing blockchain", "current_feature", "dr-empty"),
 			ExpectedContains: []string{"No results"},
 		},
 		{
-			ID:          "dr-008",
-			Ability:     "decision_recall",
+			ID: "dr-008", Ability: a,
 			Description: "Decision with 'chose X over Y' pattern, search for Y — finds the decision",
 			Setup: []Action{
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "dr-tradeoff"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Decided to use MongoDB over DynamoDB for document storage due to better query flexibility", "type": "decision"}},
+				startFeature("dr-tradeoff"),
+				note("Decided to use MongoDB over DynamoDB for document storage due to better query flexibility", "decision"),
 			},
-			Query: Query{
-				Tool:   "search",
-				Params: map[string]interface{}{"query": "DynamoDB", "scope": "current_feature", "feature": "dr-tradeoff"},
-			},
+			Query:            searchQ("DynamoDB", "current_feature", "dr-tradeoff"),
 			ExpectedContains: []string{"MongoDB", "DynamoDB"},
 		},
 		{
-			ID:          "dr-009",
-			Ability:     "decision_recall",
+			ID: "dr-009", Ability: a,
 			Description: "Add 20 decisions, search — results are ranked by relevance",
 			Setup: []Action{
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "dr-many"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Decided to use React for UI components", "type": "decision"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Decided to use Tailwind CSS for styling", "type": "decision"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Decided to use Next.js for server-side rendering", "type": "decision"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Decided to use Prisma ORM for database access", "type": "decision"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Decided to use tRPC for type-safe API calls", "type": "decision"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Decided to use Zod for runtime validation", "type": "decision"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Decided to use NextAuth for authentication", "type": "decision"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Decided to use Vercel for deployment", "type": "decision"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Decided to use Planetscale for managed MySQL", "type": "decision"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Decided to use Upstash for serverless Redis", "type": "decision"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Decided to use Resend for transactional emails", "type": "decision"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Decided to use Sentry for error monitoring", "type": "decision"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Decided to use PostHog for product analytics", "type": "decision"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Decided to use Stripe for payment processing integration", "type": "decision"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Decided to use Cloudflare for CDN and DDoS protection", "type": "decision"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Decided to use GitHub Actions for CI/CD pipeline", "type": "decision"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Decided to use Turborepo for monorepo management", "type": "decision"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Decided to use Playwright for end-to-end testing", "type": "decision"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Decided to use Vitest for unit testing", "type": "decision"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Decided to use Storybook for component documentation", "type": "decision"}},
+				startFeature("dr-many"),
+				note("Decided to use React for UI components", "decision"),
+				note("Decided to use Tailwind CSS for styling", "decision"),
+				note("Decided to use Next.js for server-side rendering", "decision"),
+				note("Decided to use Prisma ORM for database access", "decision"),
+				note("Decided to use tRPC for type-safe API calls", "decision"),
+				note("Decided to use Zod for runtime validation", "decision"),
+				note("Decided to use NextAuth for authentication", "decision"),
+				note("Decided to use Vercel for deployment", "decision"),
+				note("Decided to use Planetscale for managed MySQL", "decision"),
+				note("Decided to use Upstash for serverless Redis", "decision"),
+				note("Decided to use Resend for transactional emails", "decision"),
+				note("Decided to use Sentry for error monitoring", "decision"),
+				note("Decided to use PostHog for product analytics", "decision"),
+				note("Decided to use Stripe for payment processing integration", "decision"),
+				note("Decided to use Cloudflare for CDN and DDoS protection", "decision"),
+				note("Decided to use GitHub Actions for CI/CD pipeline", "decision"),
+				note("Decided to use Turborepo for monorepo management", "decision"),
+				note("Decided to use Playwright for end-to-end testing", "decision"),
+				note("Decided to use Vitest for unit testing", "decision"),
+				note("Decided to use Storybook for component documentation", "decision"),
 			},
-			Query: Query{
-				Tool:   "search",
-				Params: map[string]interface{}{"query": "Stripe payment", "scope": "current_feature", "feature": "dr-many"},
-			},
+			Query:            searchQ("Stripe payment", "current_feature", "dr-many"),
 			ExpectedContains: []string{"Stripe", "payment"},
 		},
 		{
-			ID:          "dr-010",
-			Ability:     "decision_recall",
+			ID: "dr-010", Ability: a,
 			Description: "Search decisions by type filter — only decisions returned",
 			Setup: []Action{
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "dr-typefilter"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Decided to use microservices architecture", "type": "decision"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Working on microservices communication layer", "type": "progress"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Microservices deployment pipeline blocked", "type": "blocker"}},
+				startFeature("dr-typefilter"),
+				note("Decided to use microservices architecture", "decision"),
+				note("Working on microservices communication layer", "progress"),
+				note("Microservices deployment pipeline blocked", "blocker"),
 			},
-			Query: Query{
-				Tool:   "search",
-				Params: map[string]interface{}{"query": "microservices", "scope": "current_feature", "feature": "dr-typefilter", "types": []interface{}{"notes"}},
-			},
+			Query:            searchTyped("microservices", "current_feature", "dr-typefilter", []interface{}{"notes"}),
 			ExpectedContains: []string{"microservices"},
 		},
 	}
@@ -481,180 +418,134 @@ func decisionRecallScenarios() []Scenario {
 
 // ---------------------------------------------------------------------------
 // Ability 3: Knowledge Updates / Contradiction (10 scenarios)
-// Test: does devmem handle fact changes correctly?
 // ---------------------------------------------------------------------------
 
 func knowledgeUpdateScenarios() []Scenario {
+	const a = "knowledge_updates"
 	return []Scenario{
 		{
-			ID:          "ku-001",
-			Ability:     "knowledge_updates",
+			ID: "ku-001", Ability: a,
 			Description: "Add fact A, then contradicting fact B (same subject+predicate) — B is active, A invalidated",
 			Setup: []Action{
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "ku-contradict"}},
-				{Tool: "add_fact", Params: map[string]interface{}{"subject": "database", "predicate": "uses", "object": "MySQL 8.0"}},
-				{Tool: "add_fact", Params: map[string]interface{}{"subject": "database", "predicate": "uses", "object": "PostgreSQL 16"}},
+				startFeature("ku-contradict"),
+				fact("database", "uses", "MySQL 8.0"),
+				fact("database", "uses", "PostgreSQL 16"),
 			},
-			Query: Query{
-				Tool:   "get_facts",
-				Params: map[string]interface{}{"feature": "ku-contradict"},
-			},
+			Query:              factsQuery("ku-contradict"),
 			ExpectedContains:   []string{"PostgreSQL 16"},
 			ExpectedNotContain: []string{"MySQL 8.0"},
 		},
 		{
-			ID:          "ku-002",
-			Ability:     "knowledge_updates",
+			ID: "ku-002", Ability: a,
 			Description: "Add 3 sequential updates to same fact — only latest active",
 			Setup: []Action{
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "ku-sequential"}},
-				{Tool: "add_fact", Params: map[string]interface{}{"subject": "go_version", "predicate": "is", "object": "1.20"}},
-				{Tool: "add_fact", Params: map[string]interface{}{"subject": "go_version", "predicate": "is", "object": "1.21"}},
-				{Tool: "add_fact", Params: map[string]interface{}{"subject": "go_version", "predicate": "is", "object": "1.22"}},
+				startFeature("ku-sequential"),
+				fact("go_version", "is", "1.20"),
+				fact("go_version", "is", "1.21"),
+				fact("go_version", "is", "1.22"),
 			},
-			Query: Query{
-				Tool:   "get_facts",
-				Params: map[string]interface{}{"feature": "ku-sequential"},
-			},
+			Query:              factsQuery("ku-sequential"),
 			ExpectedContains:   []string{"1.22"},
 			ExpectedNotContain: []string{"1.20", "1.21"},
 		},
 		{
-			ID:          "ku-003",
-			Ability:     "knowledge_updates",
+			ID: "ku-003", Ability: a,
 			Description: "Add identical fact twice — no duplicate",
 			Setup: []Action{
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "ku-duplicate"}},
-				{Tool: "add_fact", Params: map[string]interface{}{"subject": "framework", "predicate": "is", "object": "Django"}},
-				{Tool: "add_fact", Params: map[string]interface{}{"subject": "framework", "predicate": "is", "object": "Django"}},
+				startFeature("ku-duplicate"),
+				fact("framework", "is", "Django"),
+				fact("framework", "is", "Django"),
 			},
-			Query: Query{
-				Tool:   "get_facts",
-				Params: map[string]interface{}{"feature": "ku-duplicate"},
-			},
+			Query:            factsQuery("ku-duplicate"),
 			ExpectedContains: []string{"Django"},
-			// The fact should appear exactly once. We verify it contains Django
-			// but the formatFacts output should have only one line with Django.
 		},
 		{
-			ID:          "ku-004",
-			Ability:     "knowledge_updates",
+			ID: "ku-004", Ability: a,
 			Description: "Add fact, invalidate it via contradiction with empty-like new value, query active — check state",
 			Setup: []Action{
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "ku-invalidate"}},
-				{Tool: "add_fact", Params: map[string]interface{}{"subject": "deploy_target", "predicate": "is", "object": "AWS ECS"}},
-				// Override with a new value (contradiction invalidates the old one)
-				{Tool: "add_fact", Params: map[string]interface{}{"subject": "deploy_target", "predicate": "is", "object": "GCP Cloud Run"}},
+				startFeature("ku-invalidate"),
+				fact("deploy_target", "is", "AWS ECS"),
+				fact("deploy_target", "is", "GCP Cloud Run"),
 			},
-			Query: Query{
-				Tool:   "get_facts",
-				Params: map[string]interface{}{"feature": "ku-invalidate"},
-			},
+			Query:              factsQuery("ku-invalidate"),
 			ExpectedContains:   []string{"GCP Cloud Run"},
 			ExpectedNotContain: []string{"AWS ECS"},
 		},
 		{
-			ID:          "ku-005",
-			Ability:     "knowledge_updates",
+			ID: "ku-005", Ability: a,
 			Description: "Add facts at different times, query as_of old time — old facts returned",
 			Setup: []Action{
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "ku-temporal"}},
-				{Tool: "add_fact", Params: map[string]interface{}{"subject": "api_version", "predicate": "is", "object": "v1"}},
-				// The contradiction will invalidate v1 and create v2
-				{Tool: "add_fact", Params: map[string]interface{}{"subject": "api_version", "predicate": "is", "object": "v2"}},
+				startFeature("ku-temporal"),
+				fact("api_version", "is", "v1"),
+				fact("api_version", "is", "v2"),
 			},
-			Query: Query{
-				// Query active facts (latest state) — should show v2
-				Tool:   "get_facts",
-				Params: map[string]interface{}{"feature": "ku-temporal"},
-			},
+			Query:              factsQuery("ku-temporal"),
 			ExpectedContains:   []string{"v2"},
 			ExpectedNotContain: []string{"api_version is v1"},
 		},
 		{
-			ID:          "ku-006",
-			Ability:     "knowledge_updates",
+			ID: "ku-006", Ability: a,
 			Description: "Add contradicting fact, query context — new fact in context, old not",
 			Setup: []Action{
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "ku-context"}},
-				{Tool: "add_fact", Params: map[string]interface{}{"subject": "auth_provider", "predicate": "uses", "object": "Auth0"}},
-				{Tool: "add_fact", Params: map[string]interface{}{"subject": "auth_provider", "predicate": "uses", "object": "Clerk"}},
+				startFeature("ku-context"),
+				fact("auth_provider", "uses", "Auth0"),
+				fact("auth_provider", "uses", "Clerk"),
 			},
-			Query: Query{
-				Tool:   "get_context",
-				Params: map[string]interface{}{"feature": "ku-context", "tier": "standard"},
-			},
+			Query:              ctxQuery("ku-context", "standard"),
 			ExpectedContains:   []string{"Clerk"},
 			ExpectedNotContain: []string{"Auth0"},
 		},
 		{
-			ID:          "ku-007",
-			Ability:     "knowledge_updates",
+			ID: "ku-007", Ability: a,
 			Description: "5 different facts, change 2 of them — 5 active (3 original + 2 updated)",
 			Setup: []Action{
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "ku-partial"}},
-				{Tool: "add_fact", Params: map[string]interface{}{"subject": "language", "predicate": "is", "object": "Go"}},
-				{Tool: "add_fact", Params: map[string]interface{}{"subject": "database", "predicate": "is", "object": "SQLite"}},
-				{Tool: "add_fact", Params: map[string]interface{}{"subject": "cache", "predicate": "is", "object": "Redis"}},
-				{Tool: "add_fact", Params: map[string]interface{}{"subject": "queue", "predicate": "is", "object": "RabbitMQ"}},
-				{Tool: "add_fact", Params: map[string]interface{}{"subject": "monitoring", "predicate": "is", "object": "Datadog"}},
-				// Update 2 of the 5
-				{Tool: "add_fact", Params: map[string]interface{}{"subject": "database", "predicate": "is", "object": "CockroachDB"}},
-				{Tool: "add_fact", Params: map[string]interface{}{"subject": "queue", "predicate": "is", "object": "Apache Kafka"}},
+				startFeature("ku-partial"),
+				fact("language", "is", "Go"),
+				fact("database", "is", "SQLite"),
+				fact("cache", "is", "Redis"),
+				fact("queue", "is", "RabbitMQ"),
+				fact("monitoring", "is", "Datadog"),
+				fact("database", "is", "CockroachDB"),
+				fact("queue", "is", "Apache Kafka"),
 			},
-			Query: Query{
-				Tool:   "get_facts",
-				Params: map[string]interface{}{"feature": "ku-partial"},
-			},
+			Query:              factsQuery("ku-partial"),
 			ExpectedContains:   []string{"Go", "CockroachDB", "Redis", "Apache Kafka", "Datadog"},
 			ExpectedNotContain: []string{"SQLite", "RabbitMQ"},
 		},
 		{
-			ID:          "ku-008",
-			Ability:     "knowledge_updates",
+			ID: "ku-008", Ability: a,
 			Description: "Fact with same subject but different predicate — both active (no contradiction)",
 			Setup: []Action{
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "ku-diff-pred"}},
-				{Tool: "add_fact", Params: map[string]interface{}{"subject": "auth", "predicate": "uses", "object": "JWT tokens"}},
-				{Tool: "add_fact", Params: map[string]interface{}{"subject": "auth", "predicate": "requires", "object": "2FA for admin users"}},
+				startFeature("ku-diff-pred"),
+				fact("auth", "uses", "JWT tokens"),
+				fact("auth", "requires", "2FA for admin users"),
 			},
-			Query: Query{
-				Tool:   "get_facts",
-				Params: map[string]interface{}{"feature": "ku-diff-pred"},
-			},
+			Query:            factsQuery("ku-diff-pred"),
 			ExpectedContains: []string{"JWT tokens", "2FA for admin users"},
 		},
 		{
-			ID:          "ku-009",
-			Ability:     "knowledge_updates",
+			ID: "ku-009", Ability: a,
 			Description: "Add fact, add note about same topic — both exist",
 			Setup: []Action{
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "ku-mixed"}},
-				{Tool: "add_fact", Params: map[string]interface{}{"subject": "orm", "predicate": "uses", "object": "GORM"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Evaluated GORM vs sqlx, chose GORM for migration support", "type": "decision"}},
+				startFeature("ku-mixed"),
+				fact("orm", "uses", "GORM"),
+				note("Evaluated GORM vs sqlx, chose GORM for migration support", "decision"),
 			},
-			Query: Query{
-				Tool:   "get_context",
-				Params: map[string]interface{}{"feature": "ku-mixed", "tier": "standard"},
-			},
+			Query:            ctxQuery("ku-mixed", "standard"),
 			ExpectedContains: []string{"GORM"},
 		},
 		{
-			ID:          "ku-010",
-			Ability:     "knowledge_updates",
+			ID: "ku-010", Ability: a,
 			Description: "Rapid succession of contradictions (5 updates) — only latest survives",
 			Setup: []Action{
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "ku-rapid"}},
-				{Tool: "add_fact", Params: map[string]interface{}{"subject": "port", "predicate": "is", "object": "3000"}},
-				{Tool: "add_fact", Params: map[string]interface{}{"subject": "port", "predicate": "is", "object": "8080"}},
-				{Tool: "add_fact", Params: map[string]interface{}{"subject": "port", "predicate": "is", "object": "8443"}},
-				{Tool: "add_fact", Params: map[string]interface{}{"subject": "port", "predicate": "is", "object": "9090"}},
-				{Tool: "add_fact", Params: map[string]interface{}{"subject": "port", "predicate": "is", "object": "4000"}},
+				startFeature("ku-rapid"),
+				fact("port", "is", "3000"),
+				fact("port", "is", "8080"),
+				fact("port", "is", "8443"),
+				fact("port", "is", "9090"),
+				fact("port", "is", "4000"),
 			},
-			Query: Query{
-				Tool:   "get_facts",
-				Params: map[string]interface{}{"feature": "ku-rapid"},
-			},
+			Query:              factsQuery("ku-rapid"),
 			ExpectedContains:   []string{"4000"},
 			ExpectedNotContain: []string{"3000", "8080", "8443", "9090"},
 		},
@@ -663,196 +554,135 @@ func knowledgeUpdateScenarios() []Scenario {
 
 // ---------------------------------------------------------------------------
 // Ability 4: Temporal Reasoning (10 scenarios)
-// Test: can devmem answer time-based questions using bi-temporal model?
 // ---------------------------------------------------------------------------
 
 func temporalReasoningScenarios() []Scenario {
+	const a = "temporal_reasoning"
 	return []Scenario{
 		{
-			ID:          "tr-001",
-			Ability:     "temporal_reasoning",
+			ID: "tr-001", Ability: a,
 			Description: "Add fact at time T1, change at T2, query as_of T1 — original fact",
 			Setup: []Action{
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "tr-bitemporal"}},
-				{Tool: "add_fact", Params: map[string]interface{}{"subject": "runtime", "predicate": "uses", "object": "Node 18"}},
-				// Contradiction creates a new fact and invalidates the old one
-				{Tool: "add_fact", Params: map[string]interface{}{"subject": "runtime", "predicate": "uses", "object": "Node 20"}},
+				startFeature("tr-bitemporal"),
+				fact("runtime", "uses", "Node 18"),
+				fact("runtime", "uses", "Node 20"),
 			},
-			Query: Query{
-				// Query active facts — should show latest
-				Tool:   "get_facts",
-				Params: map[string]interface{}{"feature": "tr-bitemporal"},
-			},
+			Query:              factsQuery("tr-bitemporal"),
 			ExpectedContains:   []string{"Node 20"},
 			ExpectedNotContain: []string{"Node 18"},
 		},
 		{
-			ID:          "tr-002",
-			Ability:     "temporal_reasoning",
+			ID: "tr-002", Ability: a,
 			Description: "Add notes across 5 days, query recent — only recent shown",
 			Setup: []Action{
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "tr-recent"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Day 1: Initial project scaffolding", "type": "progress"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Day 2: Database schema design", "type": "progress"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Day 3: API endpoint implementation", "type": "progress"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Day 4: Frontend integration", "type": "progress"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Day 5: Testing and bug fixes", "type": "progress"}},
+				startFeature("tr-recent"),
+				note("Day 1: Initial project scaffolding", "progress"),
+				note("Day 2: Database schema design", "progress"),
+				note("Day 3: API endpoint implementation", "progress"),
+				note("Day 4: Frontend integration", "progress"),
+				note("Day 5: Testing and bug fixes", "progress"),
 			},
-			Query: Query{
-				Tool:   "get_context",
-				Params: map[string]interface{}{"feature": "tr-recent", "tier": "detailed"},
-			},
-			// Detailed tier returns all notes so Day 5 is guaranteed visible
+			Query:            ctxQuery("tr-recent", "detailed"),
 			ExpectedContains: []string{"Day 5"},
 		},
 		{
-			ID:          "tr-003",
-			Ability:     "temporal_reasoning",
+			ID: "tr-003", Ability: a,
 			Description: "Add decision Jan 1, add decision Feb 1, query — both visible",
 			Setup: []Action{
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "tr-decisions"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "January decision: use monorepo structure", "type": "decision"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "February decision: adopt trunk-based development", "type": "decision"}},
+				startFeature("tr-decisions"),
+				note("January decision: use monorepo structure", "decision"),
+				note("February decision: adopt trunk-based development", "decision"),
 			},
-			Query: Query{
-				Tool:   "get_context",
-				Params: map[string]interface{}{"feature": "tr-decisions", "tier": "standard"},
-			},
+			Query:            ctxQuery("tr-decisions", "standard"),
 			ExpectedContains: []string{"monorepo", "trunk-based"},
 		},
 		{
-			ID:          "tr-004",
-			Ability:     "temporal_reasoning",
+			ID: "tr-004", Ability: a,
 			Description: "Multiple sessions over time, query — ordered by recency",
 			Setup: []Action{
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "tr-sessions"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "First session work on authentication", "type": "progress"}},
-				{Tool: "end_session", Params: map[string]interface{}{}},
-				{Tool: "start_session", Params: map[string]interface{}{"feature": "tr-sessions", "tool": "session-2"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Second session work on authorization", "type": "progress"}},
-				{Tool: "end_session", Params: map[string]interface{}{}},
-				{Tool: "start_session", Params: map[string]interface{}{"feature": "tr-sessions", "tool": "session-3"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Third session work on audit logging", "type": "progress"}},
+				startFeature("tr-sessions"),
+				note("First session work on authentication", "progress"),
+				endSess(),
+				startSessTool("tr-sessions", "session-2"),
+				note("Second session work on authorization", "progress"),
+				endSess(),
+				startSessTool("tr-sessions", "session-3"),
+				note("Third session work on audit logging", "progress"),
 			},
-			Query: Query{
-				Tool:   "get_context",
-				Params: map[string]interface{}{"feature": "tr-sessions", "tier": "detailed"},
-			},
+			Query:            ctxQuery("tr-sessions", "detailed"),
 			ExpectedContains: []string{"Sessions:"},
 		},
 		{
-			ID:          "tr-005",
-			Ability:     "temporal_reasoning",
+			ID: "tr-005", Ability: a,
 			Description: "Feature created long ago vs recently — listed by last_active",
 			Setup: []Action{
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "tr-old-feature"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Old feature work", "type": "progress"}},
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "tr-new-feature"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "New feature work", "type": "progress"}},
+				startFeature("tr-old-feature"),
+				note("Old feature work", "progress"),
+				startFeature("tr-new-feature"),
+				note("New feature work", "progress"),
 			},
-			Query: Query{
-				Tool:   "list_features",
-				Params: map[string]interface{}{},
-			},
-			// New feature should appear (it's active, old is paused)
+			Query:            listFeaturesQuery(),
 			ExpectedContains: []string{"tr-new-feature", "tr-old-feature"},
 		},
 		{
-			ID:          "tr-006",
-			Ability:     "temporal_reasoning",
+			ID: "tr-006", Ability: a,
 			Description: "Old notes vs new notes in context — new ones ranked higher",
 			Setup: []Action{
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "tr-note-order"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Early work: set up project structure", "type": "progress"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Early work: configured linting rules", "type": "progress"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Recent work: implemented core business logic", "type": "progress"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Recent work: added comprehensive test suite", "type": "progress"}},
+				startFeature("tr-note-order"),
+				note("Early work: set up project structure", "progress"),
+				note("Early work: configured linting rules", "progress"),
+				note("Recent work: implemented core business logic", "progress"),
+				note("Recent work: added comprehensive test suite", "progress"),
 			},
-			Query: Query{
-				Tool:   "get_context",
-				Params: map[string]interface{}{"feature": "tr-note-order", "tier": "detailed"},
-			},
-			// Detailed tier returns all notes so comprehensive test suite is guaranteed visible
+			Query:            ctxQuery("tr-note-order", "detailed"),
 			ExpectedContains: []string{"comprehensive test suite"},
 		},
 		{
-			ID:          "tr-007",
-			Ability:     "temporal_reasoning",
+			ID: "tr-007", Ability: a,
 			Description: "Facts added across sessions — all visible with correct valid_at",
 			Setup: []Action{
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "tr-facts-sessions"}},
-				{Tool: "add_fact", Params: map[string]interface{}{"subject": "api", "predicate": "version", "object": "v1"}},
-				{Tool: "end_session", Params: map[string]interface{}{}},
-				{Tool: "start_session", Params: map[string]interface{}{"feature": "tr-facts-sessions"}},
-				{Tool: "add_fact", Params: map[string]interface{}{"subject": "sdk", "predicate": "version", "object": "2.0"}},
+				startFeature("tr-facts-sessions"),
+				fact("api", "version", "v1"),
+				endSess(),
+				startSess("tr-facts-sessions"),
+				fact("sdk", "version", "2.0"),
 			},
-			Query: Query{
-				Tool:   "get_facts",
-				Params: map[string]interface{}{"feature": "tr-facts-sessions"},
-			},
+			Query:            factsQuery("tr-facts-sessions"),
 			ExpectedContains: []string{"v1", "2.0"},
 		},
 		{
-			ID:          "tr-008",
-			Ability:     "temporal_reasoning",
+			ID: "tr-008", Ability: a,
 			Description: "Plan created then superseded — both in history via list query",
 			Setup: []Action{
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "tr-plan-history"}},
-				{Tool: "save_plan", Params: map[string]interface{}{
-					"title":   "Initial Plan",
-					"content": "First approach to implementation",
-					"steps": []interface{}{
-						map[string]interface{}{"title": "Design API"},
-						map[string]interface{}{"title": "Implement endpoints"},
-					},
-				}},
-				{Tool: "save_plan", Params: map[string]interface{}{
-					"title":   "Revised Plan",
-					"content": "Updated approach after feedback",
-					"steps": []interface{}{
-						map[string]interface{}{"title": "Design API v2"},
-						map[string]interface{}{"title": "Implement endpoints v2"},
-						map[string]interface{}{"title": "Add caching layer"},
-					},
-				}},
+				startFeature("tr-plan-history"),
+				savePlan("Initial Plan", "First approach to implementation", "Design API", "Implement endpoints"),
+				savePlan("Revised Plan", "Updated approach after feedback", "Design API v2", "Implement endpoints v2", "Add caching layer"),
 			},
-			Query: Query{
-				Tool:   "get_context",
-				Params: map[string]interface{}{"feature": "tr-plan-history", "tier": "standard"},
-			},
+			Query:            ctxQuery("tr-plan-history", "standard"),
 			ExpectedContains: []string{"Revised Plan"},
 		},
 		{
-			ID:          "tr-009",
-			Ability:     "temporal_reasoning",
+			ID: "tr-009", Ability: a,
 			Description: "Search results ranked by recency — newer items score higher",
 			Setup: []Action{
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "tr-search-recency"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Old authentication implementation using basic auth", "type": "progress"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "New authentication implementation using OAuth2 with PKCE flow", "type": "progress"}},
+				startFeature("tr-search-recency"),
+				note("Old authentication implementation using basic auth", "progress"),
+				note("New authentication implementation using OAuth2 with PKCE flow", "progress"),
 			},
-			Query: Query{
-				Tool:   "search",
-				Params: map[string]interface{}{"query": "authentication implementation", "scope": "current_feature", "feature": "tr-search-recency"},
-			},
+			Query:            searchQ("authentication implementation", "current_feature", "tr-search-recency"),
 			ExpectedContains: []string{"authentication"},
 		},
 		{
-			ID:          "tr-010",
-			Ability:     "temporal_reasoning",
+			ID: "tr-010", Ability: a,
 			Description: "Query context at historical point — consistent snapshot",
 			Setup: []Action{
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "tr-snapshot"}},
-				{Tool: "add_fact", Params: map[string]interface{}{"subject": "framework", "predicate": "uses", "object": "Express.js"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Set up Express.js server with middleware", "type": "progress"}},
-				{Tool: "add_fact", Params: map[string]interface{}{"subject": "framework", "predicate": "uses", "object": "Fastify"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Migrated from Express to Fastify for better performance", "type": "progress"}},
+				startFeature("tr-snapshot"),
+				fact("framework", "uses", "Express.js"),
+				note("Set up Express.js server with middleware", "progress"),
+				fact("framework", "uses", "Fastify"),
+				note("Migrated from Express to Fastify for better performance", "progress"),
 			},
-			Query: Query{
-				// Query current state
-				Tool:   "get_context",
-				Params: map[string]interface{}{"feature": "tr-snapshot", "tier": "standard"},
-			},
+			Query:              ctxQuery("tr-snapshot", "standard"),
 			ExpectedContains:   []string{"Fastify"},
 			ExpectedNotContain: []string{"Express.js"},
 		},
@@ -861,146 +691,109 @@ func temporalReasoningScenarios() []Scenario {
 
 // ---------------------------------------------------------------------------
 // Ability 5: Cross-Feature Reasoning (8 scenarios)
-// Test: can devmem aggregate across features?
 // ---------------------------------------------------------------------------
 
 func crossFeatureScenarios() []Scenario {
+	const a = "cross_feature"
 	return []Scenario{
 		{
-			ID:          "cf-001",
-			Ability:     "cross_feature",
+			ID: "cf-001", Ability: a,
 			Description: "3 features, search across all — results from all features",
 			Setup: []Action{
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "cf-frontend"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Implemented responsive dashboard layout with CSS Grid", "type": "progress"}},
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "cf-backend"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Built REST API dashboard endpoint returning aggregated metrics", "type": "progress"}},
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "cf-infra"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Deployed dashboard monitoring stack with Grafana", "type": "progress"}},
+				startFeature("cf-frontend"),
+				note("Implemented responsive dashboard layout with CSS Grid", "progress"),
+				startFeature("cf-backend"),
+				note("Built REST API dashboard endpoint returning aggregated metrics", "progress"),
+				startFeature("cf-infra"),
+				note("Deployed dashboard monitoring stack with Grafana", "progress"),
 			},
-			Query: Query{
-				Tool:   "search",
-				Params: map[string]interface{}{"query": "dashboard", "scope": "all_features"},
-			},
+			Query:            searchAll("dashboard"),
 			ExpectedContains: []string{"dashboard"},
 		},
 		{
-			ID:          "cf-002",
-			Ability:     "cross_feature",
+			ID: "cf-002", Ability: a,
 			Description: "2 features share related decisions, search — both found",
 			Setup: []Action{
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "cf-auth-svc"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Decided to use JWT with RSA-256 for inter-service authentication", "type": "decision"}},
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "cf-gateway"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Decided gateway validates JWT tokens before proxying requests", "type": "decision"}},
+				startFeature("cf-auth-svc"),
+				note("Decided to use JWT with RSA-256 for inter-service authentication", "decision"),
+				startFeature("cf-gateway"),
+				note("Decided gateway validates JWT tokens before proxying requests", "decision"),
 			},
-			Query: Query{
-				Tool:   "search",
-				Params: map[string]interface{}{"query": "JWT", "scope": "all_features"},
-			},
+			Query:            searchAll("JWT"),
 			ExpectedContains: []string{"JWT"},
 		},
 		{
-			ID:          "cf-003",
-			Ability:     "cross_feature",
+			ID: "cf-003", Ability: a,
 			Description: "List features — all shown with correct status",
 			Setup: []Action{
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "cf-feature-active"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Working on active feature", "type": "progress"}},
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "cf-feature-paused"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "This feature will be paused", "type": "progress"}},
-				// Starting a third feature auto-pauses the second
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "cf-feature-current"}},
+				startFeature("cf-feature-active"),
+				note("Working on active feature", "progress"),
+				startFeature("cf-feature-paused"),
+				note("This feature will be paused", "progress"),
+				startFeature("cf-feature-current"),
 			},
-			Query: Query{
-				Tool:   "list_features",
-				Params: map[string]interface{}{},
-			},
+			Query:            listFeaturesQuery(),
 			ExpectedContains: []string{"cf-feature-active", "cf-feature-paused", "cf-feature-current"},
 		},
 		{
-			ID:          "cf-004",
-			Ability:     "cross_feature",
+			ID: "cf-004", Ability: a,
 			Description: "Switch feature and back — context restored correctly",
 			Setup: []Action{
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "cf-switch-a"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Feature A: built the notification engine", "type": "progress"}},
-				{Tool: "add_fact", Params: map[string]interface{}{"subject": "notifications", "predicate": "uses", "object": "WebSockets"}},
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "cf-switch-b"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Feature B: built the search indexer", "type": "progress"}},
-				// Switch back to A
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "cf-switch-a"}},
+				startFeature("cf-switch-a"),
+				note("Feature A: built the notification engine", "progress"),
+				fact("notifications", "uses", "WebSockets"),
+				startFeature("cf-switch-b"),
+				note("Feature B: built the search indexer", "progress"),
+				startFeature("cf-switch-a"),
 			},
-			Query: Query{
-				Tool:   "get_context",
-				Params: map[string]interface{}{"feature": "cf-switch-a", "tier": "standard"},
-			},
+			Query:              ctxQuery("cf-switch-a", "standard"),
 			ExpectedContains:   []string{"notification engine", "WebSockets"},
 			ExpectedNotContain: []string{"search indexer"},
 		},
 		{
-			ID:          "cf-005",
-			Ability:     "cross_feature",
+			ID: "cf-005", Ability: a,
 			Description: "Same fact in 2 features — both returned in all_features search",
 			Setup: []Action{
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "cf-fact-a"}},
-				{Tool: "add_fact", Params: map[string]interface{}{"subject": "deployment", "predicate": "uses", "object": "Kubernetes"}},
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "cf-fact-b"}},
-				{Tool: "add_fact", Params: map[string]interface{}{"subject": "orchestration", "predicate": "uses", "object": "Kubernetes"}},
+				startFeature("cf-fact-a"),
+				fact("deployment", "uses", "Kubernetes"),
+				startFeature("cf-fact-b"),
+				fact("orchestration", "uses", "Kubernetes"),
 			},
-			Query: Query{
-				Tool:   "search",
-				Params: map[string]interface{}{"query": "Kubernetes", "scope": "all_features", "types": []interface{}{"facts"}},
-			},
+			Query:            searchAllTyped("Kubernetes", []interface{}{"facts"}),
 			ExpectedContains: []string{"Kubernetes"},
 		},
 		{
-			ID:          "cf-006",
-			Ability:     "cross_feature",
+			ID: "cf-006", Ability: a,
 			Description: "Notes in paused feature — still searchable",
 			Setup: []Action{
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "cf-paused-feature"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Implemented the UNIQUE_PAUSED_CONTENT rate limiter with sliding window algorithm", "type": "progress"}},
-				// Starting another feature pauses this one
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "cf-other-active"}},
+				startFeature("cf-paused-feature"),
+				note("Implemented the UNIQUE_PAUSED_CONTENT rate limiter with sliding window algorithm", "progress"),
+				startFeature("cf-other-active"),
 			},
-			Query: Query{
-				Tool:   "search",
-				Params: map[string]interface{}{"query": "UNIQUE_PAUSED_CONTENT rate limiter", "scope": "all_features"},
-			},
+			Query:            searchAll("UNIQUE_PAUSED_CONTENT rate limiter"),
 			ExpectedContains: []string{"UNIQUE_PAUSED_CONTENT"},
 		},
 		{
-			ID:          "cf-007",
-			Ability:     "cross_feature",
+			ID: "cf-007", Ability: a,
 			Description: "Done feature — still searchable",
 			Setup: []Action{
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "cf-done-feature"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Completed the UNIQUE_DONE_CONTENT OAuth2 integration with PKCE flow", "type": "progress"}},
-				// Start another to pause, then we'd mark done (but we don't have update_feature_status in actions)
-				// Instead, just search across all features — paused features are still searchable
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "cf-active-other"}},
+				startFeature("cf-done-feature"),
+				note("Completed the UNIQUE_DONE_CONTENT OAuth2 integration with PKCE flow", "progress"),
+				startFeature("cf-active-other"),
 			},
-			Query: Query{
-				Tool:   "search",
-				Params: map[string]interface{}{"query": "UNIQUE_DONE_CONTENT OAuth2", "scope": "all_features"},
-			},
+			Query:            searchAll("UNIQUE_DONE_CONTENT OAuth2"),
 			ExpectedContains: []string{"UNIQUE_DONE_CONTENT"},
 		},
 		{
-			ID:          "cf-008",
-			Ability:     "cross_feature",
+			ID: "cf-008", Ability: a,
 			Description: "Search with scope=current_feature — only current feature results",
 			Setup: []Action{
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "cf-scoped-a"}},
-				{Tool: "remember", Params: map[string]interface{}{"feature": "cf-scoped-a", "content": "Implemented the RADARFOX webhook handler for Stripe events", "type": "progress"}},
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "cf-scoped-b"}},
-				{Tool: "remember", Params: map[string]interface{}{"feature": "cf-scoped-b", "content": "Implemented the SONARWOLF email notification sender", "type": "progress"}},
+				startFeature("cf-scoped-a"),
+				noteForFeature("cf-scoped-a", "Implemented the RADARFOX webhook handler for Stripe events", "progress"),
+				startFeature("cf-scoped-b"),
+				noteForFeature("cf-scoped-b", "Implemented the SONARWOLF email notification sender", "progress"),
 			},
-			Query: Query{
-				Tool:   "search",
-				Params: map[string]interface{}{"query": "SONARWOLF", "scope": "current_feature", "feature": "cf-scoped-b"},
-			},
+			Query:              searchQ("SONARWOLF", "current_feature", "cf-scoped-b"),
 			ExpectedContains:   []string{"SONARWOLF"},
 			ExpectedNotContain: []string{"RADARFOX"},
 		},
@@ -1009,256 +802,123 @@ func crossFeatureScenarios() []Scenario {
 
 // ---------------------------------------------------------------------------
 // Ability 6: Plan Tracking (10 scenarios)
-// Test: does devmem track plans correctly?
 // ---------------------------------------------------------------------------
 
 func planTrackingScenarios() []Scenario {
+	const a = "plan_tracking"
 	return []Scenario{
 		{
-			ID:          "pt-001",
-			Ability:     "plan_tracking",
+			ID: "pt-001", Ability: a,
 			Description: "Save plan with 5 steps — all steps stored",
 			Setup: []Action{
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "pt-basic-plan"}},
-				{Tool: "save_plan", Params: map[string]interface{}{
-					"title":   "API Implementation Plan",
-					"content": "Build REST API for user management",
-					"steps": []interface{}{
-						map[string]interface{}{"title": "Design API schema"},
-						map[string]interface{}{"title": "Implement user CRUD"},
-						map[string]interface{}{"title": "Add authentication middleware"},
-						map[string]interface{}{"title": "Write integration tests"},
-						map[string]interface{}{"title": "Deploy to staging"},
-					},
-				}},
+				startFeature("pt-basic-plan"),
+				savePlan("API Implementation Plan", "Build REST API for user management",
+					"Design API schema", "Implement user CRUD", "Add authentication middleware",
+					"Write integration tests", "Deploy to staging"),
 			},
-			Query: Query{
-				Tool:   "get_context",
-				Params: map[string]interface{}{"feature": "pt-basic-plan", "tier": "standard"},
-			},
+			Query:            ctxQuery("pt-basic-plan", "standard"),
 			ExpectedContains: []string{"API Implementation Plan", "0/5"},
 		},
 		{
-			ID:          "pt-002",
-			Ability:     "plan_tracking",
+			ID: "pt-002", Ability: a,
 			Description: "Save plan, complete 2 steps — progress 2/5",
 			Setup: []Action{
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "pt-progress"}},
-				{Tool: "save_plan", Params: map[string]interface{}{
-					"title":   "Migration Plan",
-					"content": "Database migration to new schema",
-					"steps": []interface{}{
-						map[string]interface{}{"title": "Backup current data"},
-						map[string]interface{}{"title": "Run schema migration"},
-						map[string]interface{}{"title": "Verify data integrity"},
-						map[string]interface{}{"title": "Update application code"},
-						map[string]interface{}{"title": "Deploy and monitor"},
-					},
-				}},
+				startFeature("pt-progress"),
+				savePlan("Migration Plan", "Database migration to new schema",
+					"Backup current data", "Run schema migration", "Verify data integrity",
+					"Update application code", "Deploy and monitor"),
 			},
-			Query: Query{
-				Tool:   "get_context",
-				Params: map[string]interface{}{"feature": "pt-progress", "tier": "standard"},
-			},
+			Query:            ctxQuery("pt-progress", "standard"),
 			ExpectedContains: []string{"Migration Plan", "0/5"},
 		},
 		{
-			ID:          "pt-003",
-			Ability:     "plan_tracking",
+			ID: "pt-003", Ability: a,
 			Description: "Save plan, save new plan — old superseded, new active",
 			Setup: []Action{
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "pt-supersede"}},
-				{Tool: "save_plan", Params: map[string]interface{}{
-					"title":   "Original Plan",
-					"content": "First approach",
-					"steps": []interface{}{
-						map[string]interface{}{"title": "Step A1"},
-						map[string]interface{}{"title": "Step A2"},
-					},
-				}},
-				{Tool: "save_plan", Params: map[string]interface{}{
-					"title":   "Revised Plan",
-					"content": "Better approach after review",
-					"steps": []interface{}{
-						map[string]interface{}{"title": "Step B1"},
-						map[string]interface{}{"title": "Step B2"},
-						map[string]interface{}{"title": "Step B3"},
-					},
-				}},
+				startFeature("pt-supersede"),
+				savePlan("Original Plan", "First approach", "Step A1", "Step A2"),
+				savePlan("Revised Plan", "Better approach after review", "Step B1", "Step B2", "Step B3"),
 			},
-			Query: Query{
-				Tool:   "get_context",
-				Params: map[string]interface{}{"feature": "pt-supersede", "tier": "standard"},
-			},
+			Query:            ctxQuery("pt-supersede", "standard"),
 			ExpectedContains: []string{"Revised Plan", "0/3"},
 		},
 		{
-			ID:          "pt-004",
-			Ability:     "plan_tracking",
+			ID: "pt-004", Ability: a,
 			Description: "Plan-like content in remember — auto-promoted to plan",
 			Setup: []Action{
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "pt-auto-promote"}},
-				{Tool: "remember", Params: map[string]interface{}{
-					"content": "Implementation plan steps:\n1. Set up database connection pool\n2. Create migration framework\n3. Build query builder abstraction\n4. Add connection health checks",
-					"type":    "note",
-				}},
+				startFeature("pt-auto-promote"),
+				note("Implementation plan steps:\n1. Set up database connection pool\n2. Create migration framework\n3. Build query builder abstraction\n4. Add connection health checks", "note"),
 			},
-			Query: Query{
-				Tool:   "get_context",
-				Params: map[string]interface{}{"feature": "pt-auto-promote", "tier": "standard"},
-			},
-			// The plan-like content should be auto-promoted into a plan
+			Query:            ctxQuery("pt-auto-promote", "standard"),
 			ExpectedContains: []string{"Plan"},
 		},
 		{
-			ID:          "pt-005",
-			Ability:     "plan_tracking",
+			ID: "pt-005", Ability: a,
 			Description: "Plan with steps matching commit messages — verified via search",
 			Setup: []Action{
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "pt-commit-match"}},
-				{Tool: "save_plan", Params: map[string]interface{}{
-					"title":   "Feature Implementation",
-					"content": "Build the user dashboard",
-					"steps": []interface{}{
-						map[string]interface{}{"title": "Create dashboard component"},
-						map[string]interface{}{"title": "Add data visualization charts"},
-						map[string]interface{}{"title": "Implement filter controls"},
-					},
-				}},
-				// Sync would match commits but in benchmark mode we skip it.
-				// Just verify the plan exists.
+				startFeature("pt-commit-match"),
+				savePlan("Feature Implementation", "Build the user dashboard",
+					"Create dashboard component", "Add data visualization charts", "Implement filter controls"),
 			},
-			Query: Query{
-				Tool:   "get_context",
-				Params: map[string]interface{}{"feature": "pt-commit-match", "tier": "standard"},
-			},
+			Query:            ctxQuery("pt-commit-match", "standard"),
 			ExpectedContains: []string{"Feature Implementation", "0/3"},
 		},
 		{
-			ID:          "pt-006",
-			Ability:     "plan_tracking",
+			ID: "pt-006", Ability: a,
 			Description: "Get context includes plan progress",
 			Setup: []Action{
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "pt-in-context"}},
-				{Tool: "save_plan", Params: map[string]interface{}{
-					"title":   "Refactoring Plan",
-					"content": "Code quality improvements",
-					"steps": []interface{}{
-						map[string]interface{}{"title": "Extract shared utilities"},
-						map[string]interface{}{"title": "Reduce code duplication"},
-						map[string]interface{}{"title": "Improve error handling"},
-						map[string]interface{}{"title": "Add logging"},
-					},
-				}},
+				startFeature("pt-in-context"),
+				savePlan("Refactoring Plan", "Code quality improvements",
+					"Extract shared utilities", "Reduce code duplication",
+					"Improve error handling", "Add logging"),
 			},
-			Query: Query{
-				Tool:   "get_context",
-				Params: map[string]interface{}{"feature": "pt-in-context", "tier": "standard"},
-			},
+			Query:            ctxQuery("pt-in-context", "standard"),
 			ExpectedContains: []string{"Refactoring Plan", "0/4"},
 		},
 		{
-			ID:          "pt-007",
-			Ability:     "plan_tracking",
+			ID: "pt-007", Ability: a,
 			Description: "Multiple plans across features — each feature has own plan",
 			Setup: []Action{
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "pt-multi-a"}},
-				{Tool: "save_plan", Params: map[string]interface{}{
-					"feature": "pt-multi-a",
-					"title":   "Frontend Plan",
-					"content": "UI implementation",
-					"steps": []interface{}{
-						map[string]interface{}{"title": "Build component library"},
-						map[string]interface{}{"title": "Create page layouts"},
-					},
-				}},
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "pt-multi-b"}},
-				{Tool: "save_plan", Params: map[string]interface{}{
-					"feature": "pt-multi-b",
-					"title":   "Backend Plan",
-					"content": "API implementation",
-					"steps": []interface{}{
-						map[string]interface{}{"title": "Design data models"},
-						map[string]interface{}{"title": "Build API handlers"},
-						map[string]interface{}{"title": "Add middleware"},
-					},
-				}},
+				startFeature("pt-multi-a"),
+				savePlanFor("pt-multi-a", "Frontend Plan", "UI implementation",
+					"Build component library", "Create page layouts"),
+				startFeature("pt-multi-b"),
+				savePlanFor("pt-multi-b", "Backend Plan", "API implementation",
+					"Design data models", "Build API handlers", "Add middleware"),
 			},
-			Query: Query{
-				Tool:   "get_context",
-				Params: map[string]interface{}{"feature": "pt-multi-b", "tier": "standard"},
-			},
+			Query:              ctxQuery("pt-multi-b", "standard"),
 			ExpectedContains:   []string{"Backend Plan", "0/3"},
 			ExpectedNotContain: []string{"Frontend Plan"},
 		},
 		{
-			ID:          "pt-008",
-			Ability:     "plan_tracking",
+			ID: "pt-008", Ability: a,
 			Description: "Plan with all steps completed — 100% progress (via context showing plan)",
 			Setup: []Action{
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "pt-complete"}},
-				{Tool: "save_plan", Params: map[string]interface{}{
-					"title":   "Quick Fix Plan",
-					"content": "Bug fixes",
-					"steps": []interface{}{
-						map[string]interface{}{"title": "Identify root cause"},
-						map[string]interface{}{"title": "Write fix"},
-					},
-				}},
-				// We cannot directly complete steps via benchmark actions,
-				// but we verify the plan is shown in context
+				startFeature("pt-complete"),
+				savePlan("Quick Fix Plan", "Bug fixes", "Identify root cause", "Write fix"),
 			},
-			Query: Query{
-				Tool:   "get_context",
-				Params: map[string]interface{}{"feature": "pt-complete", "tier": "standard"},
-			},
+			Query:            ctxQuery("pt-complete", "standard"),
 			ExpectedContains: []string{"Quick Fix Plan", "0/2"},
 		},
 		{
-			ID:          "pt-009",
-			Ability:     "plan_tracking",
+			ID: "pt-009", Ability: a,
 			Description: "Superseded plan still in search history",
 			Setup: []Action{
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "pt-history"}},
-				{Tool: "save_plan", Params: map[string]interface{}{
-					"title":   "UNIQUE_ORIGINAL_PLAN_ALPHA",
-					"content": "First implementation approach using monolith",
-					"steps": []interface{}{
-						map[string]interface{}{"title": "Build monolith"},
-					},
-				}},
-				{Tool: "save_plan", Params: map[string]interface{}{
-					"title":   "UNIQUE_REVISED_PLAN_BETA",
-					"content": "Second approach using microservices",
-					"steps": []interface{}{
-						map[string]interface{}{"title": "Design service boundaries"},
-						map[string]interface{}{"title": "Build services"},
-					},
-				}},
+				startFeature("pt-history"),
+				savePlan("UNIQUE_ORIGINAL_PLAN_ALPHA", "First implementation approach using monolith", "Build monolith"),
+				savePlan("UNIQUE_REVISED_PLAN_BETA", "Second approach using microservices", "Design service boundaries", "Build services"),
 			},
-			Query: Query{
-				Tool:   "search",
-				Params: map[string]interface{}{"query": "UNIQUE_ORIGINAL_PLAN_ALPHA", "scope": "current_feature", "feature": "pt-history", "types": []interface{}{"plans"}},
-			},
+			Query:            searchTyped("UNIQUE_ORIGINAL_PLAN_ALPHA", "current_feature", "pt-history", []interface{}{"plans"}),
 			ExpectedContains: []string{"UNIQUE_ORIGINAL_PLAN_ALPHA"},
 		},
 		{
-			ID:          "pt-010",
-			Ability:     "plan_tracking",
+			ID: "pt-010", Ability: a,
 			Description: "Empty plan (0 steps after parsing) — handled gracefully",
 			Setup: []Action{
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "pt-empty-plan"}},
-				// Remember content that looks like a plan keyword but has no numbered steps
-				{Tool: "remember", Params: map[string]interface{}{
-					"content": "We need a plan for the implementation but haven't defined steps yet.",
-					"type":    "note",
-				}},
+				startFeature("pt-empty-plan"),
+				note("We need a plan for the implementation but haven't defined steps yet.", "note"),
 			},
-			Query: Query{
-				Tool:   "get_context",
-				Params: map[string]interface{}{"feature": "pt-empty-plan", "tier": "standard"},
-			},
-			// No plan should be auto-promoted since there are no numbered steps
+			Query:            ctxQuery("pt-empty-plan", "standard"),
 			ExpectedContains: []string{"pt-empty-plan"},
 		},
 	}
@@ -1266,110 +926,79 @@ func planTrackingScenarios() []Scenario {
 
 // ---------------------------------------------------------------------------
 // Ability 7: Abstention (7 scenarios)
-// Test: does devmem avoid returning wrong info?
 // ---------------------------------------------------------------------------
 
 func abstentionScenarios() []Scenario {
+	const a = "abstention"
 	return []Scenario{
 		{
-			ID:          "ab-001",
-			Ability:     "abstention",
+			ID: "ab-001", Ability: a,
 			Description: "Search for topic never discussed — empty/no results",
 			Setup: []Action{
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "ab-empty-search"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Set up the project with basic scaffolding", "type": "progress"}},
+				startFeature("ab-empty-search"),
+				note("Set up the project with basic scaffolding", "progress"),
 			},
-			Query: Query{
-				Tool:   "search",
-				Params: map[string]interface{}{"query": "quantum entanglement photonic computing", "scope": "current_feature", "feature": "ab-empty-search"},
-			},
+			Query:            searchQ("quantum entanglement photonic computing", "current_feature", "ab-empty-search"),
 			ExpectedContains: []string{"No results"},
 		},
 		{
-			ID:          "ab-002",
-			Ability:     "abstention",
+			ID: "ab-002", Ability: a,
 			Description: "Query context on empty feature — graceful empty response",
 			Setup: []Action{
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "ab-empty-feature"}},
+				startFeature("ab-empty-feature"),
 			},
-			Query: Query{
-				Tool:   "get_context",
-				Params: map[string]interface{}{"feature": "ab-empty-feature", "tier": "standard"},
-			},
+			Query:              ctxQuery("ab-empty-feature", "standard"),
 			ExpectedContains:   []string{"ab-empty-feature"},
 			ExpectedNotContain: []string{"Notes:", "Commits:"},
 		},
 		{
-			ID:          "ab-003",
-			Ability:     "abstention",
+			ID: "ab-003", Ability: a,
 			Description: "Search with gibberish query — no results",
 			Setup: []Action{
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "ab-gibberish"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Normal development note about API design", "type": "progress"}},
+				startFeature("ab-gibberish"),
+				note("Normal development note about API design", "progress"),
 			},
-			Query: Query{
-				Tool:   "search",
-				Params: map[string]interface{}{"query": "xyzzy plugh qwerty asdfgh zxcvbn", "scope": "current_feature", "feature": "ab-gibberish"},
-			},
+			Query:            searchQ("xyzzy plugh qwerty asdfgh zxcvbn", "current_feature", "ab-gibberish"),
 			ExpectedContains: []string{"No results"},
 		},
 		{
-			ID:          "ab-004",
-			Ability:     "abstention",
+			ID: "ab-004", Ability: a,
 			Description: "Get context on non-existent feature — error or empty",
 			Setup: []Action{
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "ab-exists"}},
+				startFeature("ab-exists"),
 			},
-			Query: Query{
-				Tool:   "get_context",
-				Params: map[string]interface{}{"feature_id": "nonexistent-feature-id-00000", "tier": "standard"},
-			},
-			// This should fail because the feature ID doesn't exist
+			Query:            Query{Tool: "get_context", Params: params{"feature_id": "nonexistent-feature-id-00000", "tier": "standard"}},
 			ExpectedContains: []string{},
 		},
 		{
-			ID:          "ab-005",
-			Ability:     "abstention",
+			ID: "ab-005", Ability: a,
 			Description: "Facts query with no facts — empty list",
 			Setup: []Action{
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "ab-no-facts"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Just a progress note, no facts here", "type": "progress"}},
+				startFeature("ab-no-facts"),
+				note("Just a progress note, no facts here", "progress"),
 			},
-			Query: Query{
-				Tool:   "get_facts",
-				Params: map[string]interface{}{"feature": "ab-no-facts"},
-			},
+			Query:            factsQuery("ab-no-facts"),
 			ExpectedContains: []string{"No active facts"},
 		},
 		{
-			ID:          "ab-006",
-			Ability:     "abstention",
+			ID: "ab-006", Ability: a,
 			Description: "Search in current_feature when no feature active — fallback behavior",
 			Setup: []Action{
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "ab-no-active"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Some content about testing", "type": "progress"}},
-				// Start another feature to pause this one, then search with the original feature scope
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "ab-other-feature"}},
+				startFeature("ab-no-active"),
+				note("Some content about testing", "progress"),
+				startFeature("ab-other-feature"),
 			},
-			Query: Query{
-				// Search with explicit feature reference should still work
-				Tool:   "search",
-				Params: map[string]interface{}{"query": "nonexistent topic xyzzy", "scope": "current_feature", "feature": "ab-other-feature"},
-			},
+			Query:            searchQ("nonexistent topic xyzzy", "current_feature", "ab-other-feature"),
 			ExpectedContains: []string{"No results"},
 		},
 		{
-			ID:          "ab-007",
-			Ability:     "abstention",
+			ID: "ab-007", Ability: a,
 			Description: "Query plan when no plan exists — no plan shown",
 			Setup: []Action{
-				{Tool: "start_feature", Params: map[string]interface{}{"name": "ab-no-plan"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Working on implementation without a formal plan", "type": "progress"}},
+				startFeature("ab-no-plan"),
+				note("Working on implementation without a formal plan", "progress"),
 			},
-			Query: Query{
-				Tool:   "get_context",
-				Params: map[string]interface{}{"feature": "ab-no-plan", "tier": "standard"},
-			},
+			Query:              ctxQuery("ab-no-plan", "standard"),
 			ExpectedNotContain: []string{"Plan:"},
 		},
 	}
