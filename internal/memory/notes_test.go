@@ -2,6 +2,7 @@ package memory_test
 
 import (
 	"testing"
+	"time"
 )
 
 func TestCreateNote(t *testing.T) {
@@ -146,5 +147,101 @@ func TestGetNote_NotFound(t *testing.T) {
 	_, err := store.GetNote("nonexistent-id")
 	if err == nil {
 		t.Fatal("expected error for nonexistent note")
+	}
+}
+
+func TestCreateNote_VeryLongContent(t *testing.T) {
+	store := newTestStore(t)
+
+	f, _ := store.CreateFeature("feat-long", "Long Content Feature")
+
+	// Create content > 10000 characters
+	longContent := ""
+	for i := 0; i < 200; i++ {
+		longContent += "This is a repeated sentence to build very long content. "
+	}
+	if len(longContent) < 10000 {
+		t.Fatalf("expected content > 10000 chars, got %d", len(longContent))
+	}
+
+	note, err := store.CreateNote(f.ID, "", longContent, "note")
+	if err != nil {
+		t.Fatalf("CreateNote with long content: %v", err)
+	}
+	if note.Content != longContent {
+		t.Error("note content does not match the long input")
+	}
+
+	// Verify we can retrieve it
+	got, err := store.GetNote(note.ID)
+	if err != nil {
+		t.Fatalf("GetNote: %v", err)
+	}
+	if got.Content != longContent {
+		t.Error("retrieved note content does not match long input")
+	}
+}
+
+func TestListNotes_LimitZeroUsesDefault(t *testing.T) {
+	store := newTestStore(t)
+
+	f, _ := store.CreateFeature("feat-lz", "Limit Zero")
+	for i := 0; i < 5; i++ {
+		store.CreateNote(f.ID, "", "Note content", "note")
+	}
+
+	// limit=0 should use default (50), so all 5 notes are returned
+	notes, err := store.ListNotes(f.ID, "", 0)
+	if err != nil {
+		t.Fatalf("ListNotes limit=0: %v", err)
+	}
+	if len(notes) != 5 {
+		t.Errorf("expected 5 notes with limit=0 (default), got %d", len(notes))
+	}
+}
+
+func TestListNotes_LimitOne(t *testing.T) {
+	store := newTestStore(t)
+
+	f, _ := store.CreateFeature("feat-l1", "Limit One")
+	store.CreateNote(f.ID, "", "First note", "note")
+	store.CreateNote(f.ID, "", "Second note", "note")
+	store.CreateNote(f.ID, "", "Third note", "note")
+
+	notes, err := store.ListNotes(f.ID, "", 1)
+	if err != nil {
+		t.Fatalf("ListNotes limit=1: %v", err)
+	}
+	if len(notes) != 1 {
+		t.Fatalf("expected 1 note with limit=1, got %d", len(notes))
+	}
+}
+
+func TestListNotes_OrderNewestFirst(t *testing.T) {
+	store := newTestStore(t)
+
+	f, _ := store.CreateFeature("feat-order", "Ordering")
+
+	// Create notes with 1-second gaps so created_at definitely differs.
+	// created_at uses second-precision formatting.
+	store.CreateNote(f.ID, "", "First created", "note")
+	time.Sleep(1100 * time.Millisecond)
+	store.CreateNote(f.ID, "", "Second created", "note")
+	time.Sleep(1100 * time.Millisecond)
+	store.CreateNote(f.ID, "", "Third created", "note")
+
+	notes, err := store.ListNotes(f.ID, "", 10)
+	if err != nil {
+		t.Fatalf("ListNotes: %v", err)
+	}
+	if len(notes) != 3 {
+		t.Fatalf("expected 3 notes, got %d", len(notes))
+	}
+	// ListNotes orders by created_at DESC, so newest should come first
+	if notes[0].Content != "Third created" {
+		t.Errorf("expected newest note first ('Third created'), got %q", notes[0].Content)
+	}
+	if notes[2].Content != "First created" {
+		t.Errorf("expected oldest note last ('First created'), got %q", notes[2].Content)
 	}
 }

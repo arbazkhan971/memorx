@@ -635,3 +635,110 @@ func TestSearchRespectsLimit(t *testing.T) {
 		t.Errorf("expected at most 3 results, got %d", len(results))
 	}
 }
+
+// ---------- Empty query test ----------
+
+func TestSearchEmptyQueryReturnsNil(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	insertFeature(t, db, "f1", "test-feature")
+	insertNote(t, db, "n1", "f1", "Some content about databases", "progress", now())
+
+	engine := search.NewEngine(db)
+	// An empty query string cannot match anything in FTS5 or trigram.
+	results, err := engine.Search("", "all_features", []string{"notes"}, "", 10)
+	// The engine may return an error or nil results; either is acceptable.
+	if err == nil && len(results) > 0 {
+		t.Errorf("expected empty or nil results for empty query, got %d results", len(results))
+	}
+}
+
+// ---------- Search across multiple features with scope=all_features ----------
+
+func TestSearchAcrossMultipleFeaturesAllScope(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	insertFeature(t, db, "f1", "feature-alpha")
+	insertFeature(t, db, "f2", "feature-beta")
+	insertFeature(t, db, "f3", "feature-gamma")
+
+	insertNote(t, db, "n1", "f1", "Logging infrastructure for microservices", "progress", now())
+	insertNote(t, db, "n2", "f2", "Logging framework setup for analytics", "progress", now())
+	insertNote(t, db, "n3", "f3", "Logging pipeline configuration completed", "progress", now())
+
+	engine := search.NewEngine(db)
+	results, err := engine.Search("logging", "all_features", []string{"notes"}, "", 20)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(results) != 3 {
+		t.Fatalf("expected 3 results across 3 features, got %d", len(results))
+	}
+
+	// Verify results come from different features
+	featureNames := make(map[string]bool)
+	for _, r := range results {
+		featureNames[r.FeatureName] = true
+	}
+	if len(featureNames) != 3 {
+		t.Errorf("expected results from 3 different features, got %d", len(featureNames))
+	}
+}
+
+// ---------- Scoring with zero links vs many links ----------
+
+func TestScoringZeroLinksVsManyLinks(t *testing.T) {
+	ts := now()
+	zeroLinks := search.Score(1.0, ts, "progress", 0)
+	manyLinks := search.Score(1.0, ts, "progress", 20)
+
+	if manyLinks <= zeroLinks {
+		t.Errorf("many links score (%f) should be higher than zero links score (%f)", manyLinks, zeroLinks)
+	}
+
+	// linkBoost(0) = 1.0, linkBoost(20) = 1.0 + 20*0.1 = 3.0
+	expectedRatio := 3.0
+	actualRatio := manyLinks / zeroLinks
+	if math.Abs(actualRatio-expectedRatio) > 0.01 {
+		t.Errorf("expected link boost ratio ~%.2f, got %.4f", expectedRatio, actualRatio)
+	}
+}
+
+// ---------- Search with special characters in query ----------
+
+func TestSearchSpecialCharactersInQuery(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	insertFeature(t, db, "f1", "test-feature")
+	insertNote(t, db, "n1", "f1", "Fixed the authentication (OAuth2) flow in production", "progress", now())
+	insertNote(t, db, "n2", "f1", `Updated the config: "max_retries" = 5`, "progress", now())
+
+	engine := search.NewEngine(db)
+
+	// Parentheses in query should not cause FTS5 syntax errors
+	results, err := engine.Search("authentication (OAuth2)", "all_features", []string{"notes"}, "", 10)
+	if err != nil {
+		t.Fatalf("Search with parentheses: %v", err)
+	}
+	if len(results) == 0 {
+		t.Error("expected at least one result for query with parentheses")
+	}
+
+	// Quotes in query should not cause errors
+	results, err = engine.Search(`"max_retries"`, "all_features", []string{"notes"}, "", 10)
+	if err != nil {
+		t.Fatalf("Search with quotes: %v", err)
+	}
+	// Should either find results or return empty without error
+	_ = results
+
+	// Colons in query should not cause FTS5 syntax errors
+	results, err = engine.Search("config: max_retries", "all_features", []string{"notes"}, "", 10)
+	if err != nil {
+		t.Fatalf("Search with colon: %v", err)
+	}
+	_ = results
+}

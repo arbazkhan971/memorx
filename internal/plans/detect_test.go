@@ -1,6 +1,8 @@
 package plans_test
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/arbaz/devmem/internal/plans"
@@ -185,5 +187,59 @@ func TestParseSteps_NoMatchingLines(t *testing.T) {
 	steps := plans.ParseSteps(content)
 	if len(steps) != 0 {
 		t.Errorf("expected 0 steps, got %d", len(steps))
+	}
+}
+
+func TestIsPlanLike_OnlyKeywordsNoNumbers(t *testing.T) {
+	// Has plan keywords but no numbered items at all
+	content := `This is a plan for the implementation phase.
+We need steps to complete the milestone.
+But there are no numbered items here.`
+
+	if plans.IsPlanLike(content) {
+		t.Error("expected IsPlanLike to return false when keywords exist but no numbered items")
+	}
+}
+
+func TestIsPlanLike_UnicodeContent(t *testing.T) {
+	// Unicode content with plan structure
+	content := `Implementation plan for the API:
+1. Create the database schema with UTF-8 support (日本語テスト)
+2. Add internationalization endpoints (données françaises)
+3. Write tests for multi-language content (Ünïcödé)`
+
+	if !plans.IsPlanLike(content) {
+		t.Error("expected IsPlanLike to return true for plan with unicode content")
+	}
+}
+
+func TestIsPlanLike_UnicodeContentNoPlan(t *testing.T) {
+	// Unicode content without plan keywords
+	content := `日本語のテキスト。
+これは普通のメモです。
+特にプランではありません。`
+
+	if plans.IsPlanLike(content) {
+		t.Error("expected IsPlanLike to return false for unicode text without plan keywords")
+	}
+}
+
+func TestParseSteps_100PlusSteps(t *testing.T) {
+	// Stress test: generate 150 numbered steps
+	var lines []string
+	for i := 1; i <= 150; i++ {
+		lines = append(lines, fmt.Sprintf("%d. Step number %d", i, i))
+	}
+	content := strings.Join(lines, "\n")
+
+	steps := plans.ParseSteps(content)
+	if len(steps) != 150 {
+		t.Fatalf("expected 150 steps, got %d", len(steps))
+	}
+	if steps[0].Title != "Step number 1" {
+		t.Errorf("expected first step title 'Step number 1', got %q", steps[0].Title)
+	}
+	if steps[149].Title != "Step number 150" {
+		t.Errorf("expected last step title 'Step number 150', got %q", steps[149].Title)
 	}
 }

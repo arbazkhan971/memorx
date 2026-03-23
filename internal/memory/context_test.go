@@ -1,8 +1,13 @@
 package memory_test
 
 import (
+	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/arbaz/devmem/internal/memory"
+	"github.com/arbaz/devmem/internal/plans"
+	"github.com/arbaz/devmem/internal/storage"
 )
 
 func TestGetContext_Compact(t *testing.T) {
@@ -172,5 +177,153 @@ func TestGetContext_FeatureNotFound(t *testing.T) {
 	_, err := store.GetContext("nonexistent-id", "compact", nil)
 	if err == nil {
 		t.Fatal("expected error for nonexistent feature")
+	}
+}
+
+func TestGetContext_CompactReturnsMinimalData(t *testing.T) {
+	store := newTestStore(t)
+
+	f, _ := store.CreateFeature("feat-compact", "Compact Feature")
+	// Create multiple notes, facts, and sessions — compact should NOT return them all.
+	store.CreateNote(f.ID, "", "Note 1", "note")
+	store.CreateNote(f.ID, "", "Note 2", "decision")
+	store.CreateNote(f.ID, "", "Note 3", "blocker")
+	store.CreateFact(f.ID, "", "db", "uses", "sqlite")
+	store.CreateSession(f.ID, "claude-code")
+	store.CreateSession(f.ID, "cursor")
+
+	ctx, err := store.GetContext(f.ID, "compact", nil)
+	if err != nil {
+		t.Fatalf("GetContext compact: %v", err)
+	}
+
+	if ctx.Feature == nil {
+		t.Fatal("expected non-nil feature in compact tier")
+	}
+	// Compact tier should have at most 1 commit (loadRecentCommits with limit=1)
+	if len(ctx.RecentCommits) > 1 {
+		t.Errorf("compact tier should have at most 1 commit, got %d", len(ctx.RecentCommits))
+	}
+	// Compact tier should NOT load notes, facts, sessions, or links
+	if len(ctx.RecentNotes) != 0 {
+		t.Errorf("compact tier should have 0 recent notes, got %d", len(ctx.RecentNotes))
+	}
+	if len(ctx.ActiveFacts) != 0 {
+		t.Errorf("compact tier should have 0 active facts, got %d", len(ctx.ActiveFacts))
+	}
+	if len(ctx.SessionHistory) != 0 {
+		t.Errorf("compact tier should have 0 sessions, got %d", len(ctx.SessionHistory))
+	}
+	if len(ctx.Links) != 0 {
+		t.Errorf("compact tier should have 0 links, got %d", len(ctx.Links))
+	}
+}
+
+func TestGetContext_DetailedReturnsSessionHistoryAndLinks(t *testing.T) {
+	store := newTestStore(t)
+
+	f, _ := store.CreateFeature("feat-detail", "Detailed Feature")
+	s1, _ := store.CreateSession(f.ID, "claude-code")
+	s2, _ := store.CreateSession(f.ID, "cursor")
+	store.CreateNote(f.ID, s1.ID, "Note in session 1", "note")
+	store.CreateNote(f.ID, s2.ID, "Note in session 2", "decision")
+	store.CreateFact(f.ID, s1.ID, "api", "uses", "REST")
+
+	ctx, err := store.GetContext(f.ID, "detailed", nil)
+	if err != nil {
+		t.Fatalf("GetContext detailed: %v", err)
+	}
+
+	if ctx.Feature == nil {
+		t.Fatal("expected non-nil feature")
+	}
+	if len(ctx.SessionHistory) < 2 {
+		t.Errorf("expected at least 2 sessions in detailed tier, got %d", len(ctx.SessionHistory))
+	}
+	if len(ctx.RecentNotes) < 2 {
+		t.Errorf("expected at least 2 notes in detailed tier, got %d", len(ctx.RecentNotes))
+	}
+	if len(ctx.ActiveFacts) < 1 {
+		t.Errorf("expected at least 1 active fact in detailed tier, got %d", len(ctx.ActiveFacts))
+	}
+}
+
+func TestGetContext_NoCommitsReturnsEmptyCommitsList(t *testing.T) {
+	store := newTestStore(t)
+
+	f, _ := store.CreateFeature("feat-nocommits", "No Commits Feature")
+	store.CreateNote(f.ID, "", "A note without commits", "note")
+
+	// Test all three tiers — commits list should be empty (nil) in each
+	for _, tier := range []string{"compact", "standard", "detailed"} {
+		ctx, err := store.GetContext(f.ID, tier, nil)
+		if err != nil {
+			t.Fatalf("GetContext %s: %v", tier, err)
+		}
+		if len(ctx.RecentCommits) != 0 {
+			t.Errorf("tier %s: expected 0 commits, got %d", tier, len(ctx.RecentCommits))
+		}
+	}
+}
+
+func TestGetContext_WithPlanReturnsPlanInfo(t *testing.T) {
+	// We need both the Store and the raw DB to create a plan via the plans.Manager.
+	dir := t.TempDir()
+	db, err := storage.NewDB(filepath.Join(dir, "test.db"))
+	if err != nil {
+		t.Fatalf("NewDB: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	if err := storage.Migrate(db); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	store := memory.NewStore(db)
+	mgr := plans.NewManager(db)
+
+	f, _ := store.CreateFeature("feat-plan", "Feature With Plan")
+	sess, _ := store.CreateSession(f.ID, "test-tool")
+
+	// Create a plan with 3 steps via the plans Manager (session_id required by FK)
+	stepInputs := []plans.StepInput{
+		{Title: "Step 1", Description: "First step"},
+		{Title: "Step 2", Description: "Second step"},
+		{Title: "Step 3", Description: "Third step"},
+	}
+	plan, err := mgr.CreatePlan(f.ID, sess.ID, "Implement Auth", "Auth implementation plan", "test", stepInputs)
+	if err != nil {
+		t.Fatalf("CreatePlan: %v", err)
+	}
+
+	// Complete the first step
+	planSteps, err := mgr.GetPlanSteps(plan.ID)
+	if err != nil {
+		t.Fatalf("GetPlanSteps: %v", err)
+	}
+	if len(planSteps) != 3 {
+		t.Fatalf("expected 3 plan steps, got %d", len(planSteps))
+	}
+	if err := mgr.UpdateStepStatus(planSteps[0].ID, "completed"); err != nil {
+		t.Fatalf("UpdateStepStatus: %v", err)
+	}
+
+	ctx, err := store.GetContext(f.ID, "compact", nil)
+	if err != nil {
+		t.Fatalf("GetContext: %v", err)
+	}
+
+	if ctx.Plan == nil {
+		t.Fatal("expected non-nil Plan in context")
+	}
+	if ctx.Plan.Title != "Implement Auth" {
+		t.Errorf("expected plan title 'Implement Auth', got %q", ctx.Plan.Title)
+	}
+	if ctx.Plan.Status != "active" {
+		t.Errorf("expected plan status 'active', got %q", ctx.Plan.Status)
+	}
+	if ctx.Plan.TotalSteps != 3 {
+		t.Errorf("expected 3 total steps, got %d", ctx.Plan.TotalSteps)
+	}
+	if ctx.Plan.CompletedStep != 1 {
+		t.Errorf("expected 1 completed step, got %d", ctx.Plan.CompletedStep)
 	}
 }
