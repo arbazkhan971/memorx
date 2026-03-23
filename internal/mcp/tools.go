@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/arbaz/devmem/bench"
 	"github.com/arbaz/devmem/internal/git"
 	"github.com/arbaz/devmem/internal/memory"
 	"github.com/arbaz/devmem/internal/plans"
@@ -943,4 +944,44 @@ func (s *DevMemServer) handleTrackFiles(ctx context.Context, req mcplib.CallTool
 		}
 	}
 	return respond("tracked %d files (%s) in %s", tracked, action, feature.Name)
+}
+
+func (s *DevMemServer) handleSuggest(_ context.Context, _ mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+	suggestions, err := s.store.GetSuggestions()
+	if err != nil {
+		return respondErr("Failed to get suggestions: %v", err)
+	}
+	var b strings.Builder
+	b.WriteString("# Suggestions\n\n")
+	b.WriteString(memory.FormatSuggestions(suggestions))
+	return mcplib.NewToolResultText(b.String()), nil
+}
+
+func (s *DevMemServer) handleTimeline(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+	days := getIntArg(req, "days", 30)
+	feature := getStringArg(req, "feature", "")
+	events, err := s.store.GetTimeline(days, feature)
+	if err != nil {
+		return respondErr("Failed to get timeline: %v", err)
+	}
+	var b strings.Builder
+	scope := "all features"
+	if feature != "" {
+		scope = feature
+	}
+	fmt.Fprintf(&b, "# Timeline (%s, last %d days)\n\n", scope, days)
+	b.WriteString(memory.FormatTimeline(events))
+	return mcplib.NewToolResultText(b.String()), nil
+}
+
+func (s *DevMemServer) handleBenchmarkSelf(_ context.Context, _ mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+	eval, err := bench.NewTempEvaluator()
+	if err != nil {
+		return respondErr("Failed to create benchmark evaluator: %v", err)
+	}
+	defer eval.Close()
+	scenarios := bench.AllScenarios()
+	results := eval.RunAll(scenarios)
+	report := bench.GenerateReport(results)
+	return mcplib.NewToolResultText(report.PrintMarkdown()), nil
 }

@@ -98,6 +98,7 @@ func TestAllToolsExist(t *testing.T) {
 		{"devmem_export"}, {"devmem_health"}, {"devmem_forget"},
 		{"devmem_analytics"}, {"devmem_generate_rules"},
 		{"devmem_snapshot"}, {"devmem_recover"},
+		{"devmem_suggest"}, {"devmem_timeline"}, {"devmem_benchmark_self"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if _, ok := toolMap[tc.name]; !ok {
@@ -1079,5 +1080,158 @@ func TestHandlerErrors_RequiresActiveFeature(t *testing.T) {
 				t.Errorf("expected error about no active feature, got: %s", text)
 			}
 		})
+	}
+}
+
+func TestHandleSuggest_Empty(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	ctx := context.Background()
+
+	res, err := srv.handleSuggest(ctx, newReq("devmem_suggest", nil))
+	if err != nil {
+		t.Fatalf("handleSuggest error: %v", err)
+	}
+
+	text := resultText(t, res)
+	if !strings.Contains(text, "# Suggestions") {
+		t.Errorf("suggest should contain header, got:\n%s", text)
+	}
+	if !strings.Contains(text, "No suggestions") {
+		t.Errorf("suggest on empty DB should say 'No suggestions', got:\n%s", text)
+	}
+}
+
+func TestHandleSuggest_WithBlocker(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	ctx := context.Background()
+
+	_, err := srv.handleStartFeature(ctx, newReq("devmem_start_feature", map[string]interface{}{
+		"name": "suggest-blocker-test",
+	}))
+	if err != nil {
+		t.Fatalf("handleStartFeature error: %v", err)
+	}
+
+	// Insert a blocker note (will be current, not stale)
+	_, err = srv.handleRemember(ctx, newReq("devmem_remember", map[string]interface{}{
+		"content": "blocked on external API rate limits",
+		"type":    "blocker",
+	}))
+	if err != nil {
+		t.Fatalf("handleRemember error: %v", err)
+	}
+
+	res, err := srv.handleSuggest(ctx, newReq("devmem_suggest", nil))
+	if err != nil {
+		t.Fatalf("handleSuggest error: %v", err)
+	}
+
+	text := resultText(t, res)
+	if !strings.Contains(text, "# Suggestions") {
+		t.Errorf("suggest should contain header, got:\n%s", text)
+	}
+}
+
+func TestHandleTimeline_Empty(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	ctx := context.Background()
+
+	res, err := srv.handleTimeline(ctx, newReq("devmem_timeline", nil))
+	if err != nil {
+		t.Fatalf("handleTimeline error: %v", err)
+	}
+
+	text := resultText(t, res)
+	if !strings.Contains(text, "# Timeline") {
+		t.Errorf("timeline should contain header, got:\n%s", text)
+	}
+	if !strings.Contains(text, "No events") {
+		t.Errorf("timeline on empty DB should say 'No events', got:\n%s", text)
+	}
+}
+
+func TestHandleTimeline_WithData(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	ctx := context.Background()
+
+	_, err := srv.handleStartFeature(ctx, newReq("devmem_start_feature", map[string]interface{}{
+		"name": "timeline-test",
+	}))
+	if err != nil {
+		t.Fatalf("handleStartFeature error: %v", err)
+	}
+	_, err = srv.handleRemember(ctx, newReq("devmem_remember", map[string]interface{}{
+		"content": "decided to use gRPC for internal communication",
+		"type":    "decision",
+	}))
+	if err != nil {
+		t.Fatalf("handleRemember error: %v", err)
+	}
+
+	res, err := srv.handleTimeline(ctx, newReq("devmem_timeline", map[string]interface{}{
+		"days": float64(7),
+	}))
+	if err != nil {
+		t.Fatalf("handleTimeline error: %v", err)
+	}
+
+	text := resultText(t, res)
+	if !strings.Contains(text, "# Timeline") {
+		t.Errorf("timeline should contain header, got:\n%s", text)
+	}
+	if !strings.Contains(text, "[decision]") || !strings.Contains(text, "gRPC") {
+		t.Errorf("timeline should contain the decision event, got:\n%s", text)
+	}
+}
+
+func TestHandleTimeline_FeatureFilter(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	ctx := context.Background()
+
+	_, err := srv.handleStartFeature(ctx, newReq("devmem_start_feature", map[string]interface{}{
+		"name": "timeline-filter-test",
+	}))
+	if err != nil {
+		t.Fatalf("handleStartFeature error: %v", err)
+	}
+	_, err = srv.handleRemember(ctx, newReq("devmem_remember", map[string]interface{}{
+		"content": "a filtered timeline note",
+		"type":    "note",
+	}))
+	if err != nil {
+		t.Fatalf("handleRemember error: %v", err)
+	}
+
+	res, err := srv.handleTimeline(ctx, newReq("devmem_timeline", map[string]interface{}{
+		"feature": "timeline-filter-test",
+	}))
+	if err != nil {
+		t.Fatalf("handleTimeline error: %v", err)
+	}
+
+	text := resultText(t, res)
+	if !strings.Contains(text, "timeline-filter-test") {
+		t.Errorf("timeline with feature filter should mention feature name, got:\n%s", text)
+	}
+}
+
+func TestHandleBenchmarkSelf(t *testing.T) {
+	if testing.Short() {
+		t.Skip("benchmark test is slow")
+	}
+	srv, _ := setupTestServer(t)
+	ctx := context.Background()
+
+	res, err := srv.handleBenchmarkSelf(ctx, newReq("devmem_benchmark_self", nil))
+	if err != nil {
+		t.Fatalf("handleBenchmarkSelf error: %v", err)
+	}
+
+	text := resultText(t, res)
+	if !strings.Contains(text, "Benchmark Report") {
+		t.Errorf("benchmark result should contain 'Benchmark Report', got:\n%s", text[:min(200, len(text))])
+	}
+	if !strings.Contains(text, "Overall Score") {
+		t.Errorf("benchmark result should contain 'Overall Score', got:\n%s", text[:min(200, len(text))])
 	}
 }

@@ -237,6 +237,22 @@ func (s *DevMemServer) registerTools(srv *server.MCPServer) {
 			),
 			Handler: s.handleProjectMap,
 		},
+		server.ServerTool{
+			Tool:    mcplib.NewTool("devmem_suggest", mcplib.WithDescription("Proactive suggestions based on memory patterns. Checks for stale blockers, inactive features, near-complete plans, health issues, missing summaries, and fact contradictions.")),
+			Handler: s.handleSuggest,
+		},
+		server.ServerTool{
+			Tool: mcplib.NewTool("devmem_timeline",
+				mcplib.WithDescription("Chronological timeline of project events: sessions, decisions, commits, notes, and facts."),
+				mcplib.WithNumber("days", mcplib.Description("Number of days to include (default 30)")),
+				mcplib.WithString("feature", mcplib.Description("Filter to a specific feature name")),
+			),
+			Handler: s.handleTimeline,
+		},
+		server.ServerTool{
+			Tool:    mcplib.NewTool("devmem_benchmark_self", mcplib.WithDescription("Run the devmem benchmark suite against your own memory. Returns a detailed report of memory accuracy across abilities.")),
+			Handler: s.handleBenchmarkSelf,
+		},
 	)
 }
 
