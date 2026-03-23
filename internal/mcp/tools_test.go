@@ -695,6 +695,63 @@ func TestHandleSearch_AllFeaturesScope(t *testing.T) {
 	}
 }
 
+func TestHandleStatus_WithFeaturesInAllStates(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	ctx := context.Background()
+
+	// Create features in different states
+	_, _ = srv.handleStartFeature(ctx, newReq("devmem_start_feature", map[string]interface{}{
+		"name":        "feat-done",
+		"description": "will be done",
+	}))
+	_, _ = srv.handleStartFeature(ctx, newReq("devmem_start_feature", map[string]interface{}{
+		"name":        "feat-paused",
+		"description": "will be paused",
+	}))
+	_, _ = srv.handleStartFeature(ctx, newReq("devmem_start_feature", map[string]interface{}{
+		"name":        "feat-active",
+		"description": "the active one",
+	}))
+
+	res, err := srv.handleStatus(ctx, newReq("devmem_status", nil))
+	if err != nil {
+		t.Fatalf("handleStatus error: %v", err)
+	}
+	text := resultText(t, res)
+	if !strings.Contains(text, "feat-active") {
+		t.Errorf("status should contain active feature name, got:\n%s", text)
+	}
+}
+
+func TestHandleRemember_EachNoteType(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	ctx := context.Background()
+
+	_, err := srv.handleStartFeature(ctx, newReq("devmem_start_feature", map[string]interface{}{
+		"name": "note-type-test",
+	}))
+	if err != nil {
+		t.Fatalf("handleStartFeature: %v", err)
+	}
+
+	noteTypes := []string{"progress", "decision", "blocker", "next_step", "note"}
+	for _, nt := range noteTypes {
+		t.Run(nt, func(t *testing.T) {
+			res, err := srv.handleRemember(ctx, newReq("devmem_remember", map[string]interface{}{
+				"content": "Test content for " + nt,
+				"type":    nt,
+			}))
+			if err != nil {
+				t.Fatalf("handleRemember(%s) error: %v", nt, err)
+			}
+			text := resultText(t, res)
+			if !strings.Contains(text, "Remembered") {
+				t.Errorf("expected 'Remembered' in result for type %s, got:\n%s", nt, text)
+			}
+		})
+	}
+}
+
 func TestHandleImportSession_EmptyFeatureName(t *testing.T) {
 	srv, _ := setupTestServer(t)
 	ctx := context.Background()

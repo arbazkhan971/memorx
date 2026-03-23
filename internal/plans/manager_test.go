@@ -217,6 +217,54 @@ func TestCreatePlan_EmptyStepsReturnsError(t *testing.T) {
 	}
 }
 
+func TestGetActivePlan_NoPlansReturnsError(t *testing.T) {
+	db := setupTestDB(t)
+	mgr := plans.NewManager(db)
+	featureID := createTestFeature(t, db)
+
+	plan, err := mgr.GetActivePlan(featureID)
+	if err == nil {
+		t.Fatal("expected error for feature with no plan")
+	}
+	if plan != nil {
+		t.Error("expected nil plan")
+	}
+}
+
+func TestUpdateStepStatus_AllStatuses(t *testing.T) {
+	db := setupTestDB(t)
+	mgr := plans.NewManager(db)
+	featureID := createTestFeature(t, db)
+	sessionID := createTestSession(t, db, featureID)
+
+	steps := []plans.StepInput{
+		{Title: "Step A", Description: "First"},
+		{Title: "Step B", Description: "Second"},
+		{Title: "Step C", Description: "Third"},
+	}
+	plan, err := mgr.CreatePlan(featureID, sessionID, "Status Test", "", "test", steps)
+	if err != nil {
+		t.Fatalf("CreatePlan: %v", err)
+	}
+	planSteps, err := mgr.GetPlanSteps(plan.ID)
+	if err != nil {
+		t.Fatalf("GetPlanSteps: %v", err)
+	}
+
+	statuses := []string{"in_progress", "completed", "skipped"}
+	for i, status := range statuses {
+		t.Run(status, func(t *testing.T) {
+			if err := mgr.UpdateStepStatus(planSteps[i].ID, status); err != nil {
+				t.Fatalf("UpdateStepStatus(%s): %v", status, err)
+			}
+			updated, _ := mgr.GetPlanSteps(plan.ID)
+			if updated[i].Status != status {
+				t.Errorf("expected status %q, got %q", status, updated[i].Status)
+			}
+		})
+	}
+}
+
 func TestGetActivePlan(t *testing.T) {
 	db := setupTestDB(t)
 	mgr := plans.NewManager(db)

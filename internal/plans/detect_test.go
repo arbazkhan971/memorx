@@ -224,6 +224,36 @@ func TestIsPlanLike_UnicodeContentNoPlan(t *testing.T) {
 	}
 }
 
+func TestIsPlanLike_VariousEdgeCases(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		want    bool
+	}{
+		{"just whitespace", "   \n\t  ", false},
+		{"keyword no list", "This is a plan", false},
+		{"milestone with items", "Milestone items:\n1. Do A\n2. Do B\n3. Do C", true},
+		{"phase with items", "Phase 1 breakdown:\n1. Gather requirements\n2. Design schema\n3. Build MVP", true},
+		{"implementation with parens", "Implementation details:\n1) First\n2) Second\n3) Third", true},
+		{"single line", "plan: 1. A 2. B 3. C", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := plans.IsPlanLike(tc.content)
+			if got != tc.want {
+				t.Errorf("IsPlanLike(%q) = %v, want %v", tc.name, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestParseSteps_WhitespaceOnly(t *testing.T) {
+	steps := plans.ParseSteps("   \n\t  \n  ")
+	if len(steps) != 0 {
+		t.Errorf("expected 0 steps for whitespace, got %d", len(steps))
+	}
+}
+
 func TestParseSteps_100PlusSteps(t *testing.T) {
 	// Stress test: generate 150 numbered steps
 	var lines []string

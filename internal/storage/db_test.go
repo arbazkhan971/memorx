@@ -84,3 +84,62 @@ func TestDB_Close_Idempotent(t *testing.T) {
 		db.Close()
 	}()
 }
+
+func TestNewDB_WALModePersistsAcrossReopen(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "memory.db")
+
+	db1, err := storage.NewDB(dbPath)
+	if err != nil {
+		t.Fatalf("first NewDB: %v", err)
+	}
+	db1.Close()
+
+	db2, err := storage.NewDB(dbPath)
+	if err != nil {
+		t.Fatalf("second NewDB: %v", err)
+	}
+	defer db2.Close()
+
+	var journalMode string
+	err = db2.Reader().QueryRow("PRAGMA journal_mode").Scan(&journalMode)
+	if err != nil {
+		t.Fatalf("PRAGMA query: %v", err)
+	}
+	if journalMode != "wal" {
+		t.Fatalf("expected WAL mode after reopen, got %s", journalMode)
+	}
+}
+
+func TestNewDB_PathReturnsCorrectPath(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "subdir", "memory.db")
+
+	db, err := storage.NewDB(dbPath)
+	if err != nil {
+		t.Fatalf("NewDB: %v", err)
+	}
+	defer db.Close()
+
+	if db.Path() != dbPath {
+		t.Fatalf("expected path %s, got %s", dbPath, db.Path())
+	}
+}
+
+func TestNewDB_ForeignKeysEnabled(t *testing.T) {
+	dir := t.TempDir()
+	db, err := storage.NewDB(filepath.Join(dir, "memory.db"))
+	if err != nil {
+		t.Fatalf("NewDB: %v", err)
+	}
+	defer db.Close()
+
+	var fk int
+	err = db.Writer().QueryRow("PRAGMA foreign_keys").Scan(&fk)
+	if err != nil {
+		t.Fatalf("PRAGMA foreign_keys: %v", err)
+	}
+	if fk != 1 {
+		t.Fatalf("expected foreign_keys=1, got %d", fk)
+	}
+}

@@ -367,6 +367,34 @@ func TestRunOnce_WithEnoughNotesTriggersSummarization(t *testing.T) {
 	}
 }
 
+func TestCalculateEntropy_Components(t *testing.T) {
+	db := newTestDB(t)
+	engine := consolidation.NewEngine(db, consolidation.DefaultConfig())
+
+	// With no data, entropy should be pure time-based (hours since last run)
+	state, err := engine.GetState()
+	if err != nil {
+		t.Fatalf("GetState: %v", err)
+	}
+	// Before any RunOnce, entropy should be 0
+	if state.EntropyScore != 0.0 {
+		t.Errorf("expected initial entropy 0.0, got %f", state.EntropyScore)
+	}
+
+	// After RunOnce, entropy should reflect time component
+	if err := engine.RunOnce(); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	state, err = engine.GetState()
+	if err != nil {
+		t.Fatalf("GetState after RunOnce: %v", err)
+	}
+	// Entropy should be >= 0 and <= 1
+	if state.EntropyScore < 0 || state.EntropyScore > 1.0 {
+		t.Errorf("expected entropy in [0, 1], got %f", state.EntropyScore)
+	}
+}
+
 func TestGetState_ReflectsCorrectCounts(t *testing.T) {
 	db := newTestDB(t)
 	engine := consolidation.NewEngine(db, consolidation.DefaultConfig())

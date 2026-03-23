@@ -115,6 +115,46 @@ func TestAutoLink_DoesNotLinkToSelf(t *testing.T) {
 	t.Logf("AutoLink created %d links (none should be self-links)", count)
 }
 
+func TestCreateLink_AllRelationshipTypes(t *testing.T) {
+	relationships := []string{"related", "extends", "implements", "contradicts"}
+	for _, rel := range relationships {
+		t.Run(rel, func(t *testing.T) {
+			store := newTestStore(t)
+			f, _ := store.CreateFeature("feat-"+rel, "Test "+rel)
+			n1, _ := store.CreateNote(f.ID, "", "Source for "+rel, "note")
+			n2, _ := store.CreateNote(f.ID, "", "Target for "+rel, "note")
+			err := store.CreateLink(n1.ID, "note", n2.ID, "note", rel, 0.7)
+			if err != nil {
+				t.Fatalf("CreateLink(%s): %v", rel, err)
+			}
+			links, err := store.GetLinks(n1.ID, "note")
+			if err != nil {
+				t.Fatalf("GetLinks: %v", err)
+			}
+			if len(links) != 1 {
+				t.Fatalf("expected 1 link, got %d", len(links))
+			}
+			if links[0].Relationship != rel {
+				t.Errorf("expected relationship %q, got %q", rel, links[0].Relationship)
+			}
+		})
+	}
+}
+
+func TestAutoLink_ReturnsZeroForVeryShortContent(t *testing.T) {
+	store := newTestStore(t)
+	f, _ := store.CreateFeature("feat-short", "Short content test")
+	note, _ := store.CreateNote(f.ID, "", "x", "note")
+
+	count, err := store.AutoLink(note.ID, "note", "x")
+	if err != nil {
+		t.Fatalf("AutoLink: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("expected 0 links for very short content, got %d", count)
+	}
+}
+
 func TestAutoLink(t *testing.T) {
 	store := newTestStore(t)
 
