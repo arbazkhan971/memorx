@@ -318,3 +318,75 @@ func TestClassifyIntent_JSTestFiles(t *testing.T) {
 		t.Errorf("expected 0.6, got %f", confidence)
 	}
 }
+
+func TestClassifyIntent_MultipleKeywords_FirstMatchWins(t *testing.T) {
+	// The tokenizer splits the message into words and iterates over them in order.
+	// The first matching keyword determines the intent type.
+	tests := []struct {
+		name     string
+		message  string
+		wantType string
+		wantConf float64
+	}{
+		{
+			name:     "fix before add",
+			message:  "Fix add user validation",
+			wantType: "bugfix",
+			wantConf: 0.8,
+		},
+		{
+			name:     "add before fix",
+			message:  "Add fix for broken tests",
+			wantType: "feature",
+			wantConf: 0.8,
+		},
+		{
+			name:     "refactor before test",
+			message:  "Refactor test helper utilities",
+			wantType: "refactor",
+			wantConf: 0.8,
+		},
+		{
+			name:     "test before deploy",
+			message:  "Test deploy pipeline changes",
+			wantType: "test",
+			wantConf: 0.8,
+		},
+		{
+			name:     "doc before cleanup",
+			message:  "Doc cleanup for API reference",
+			wantType: "docs",
+			wantConf: 0.8,
+		},
+		{
+			name:     "cleanup before new",
+			message:  "Cleanup new unused imports",
+			wantType: "cleanup",
+			wantConf: 0.8,
+		},
+		{
+			name:     "conventional prefix overrides all keywords",
+			message:  "feat: fix refactor test doc deploy cleanup",
+			wantType: "feature",
+			wantConf: 0.9,
+		},
+		{
+			name:     "fix prefix overrides add keyword",
+			message:  "fix: add new feature support",
+			wantType: "bugfix",
+			wantConf: 0.9,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			intentType, confidence := git.ClassifyIntent(tc.message, nil)
+			if intentType != tc.wantType {
+				t.Errorf("ClassifyIntent(%q) type = %s, want %s", tc.message, intentType, tc.wantType)
+			}
+			if confidence != tc.wantConf {
+				t.Errorf("ClassifyIntent(%q) confidence = %f, want %f", tc.message, confidence, tc.wantConf)
+			}
+		})
+	}
+}

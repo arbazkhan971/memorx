@@ -260,3 +260,238 @@ func TestGetCurrentBranch(t *testing.T) {
 		t.Fatal("branch name is empty")
 	}
 }
+
+func TestReadCommits_ExcludesMergeCommits(t *testing.T) {
+	dir := t.TempDir()
+	dir, _ = filepath.EvalSymlinks(dir)
+
+	env := append(os.Environ(),
+		"GIT_CONFIG_GLOBAL=/dev/null",
+		"GIT_AUTHOR_NAME=Test User",
+		"GIT_AUTHOR_EMAIL=test@example.com",
+		"GIT_COMMITTER_NAME=Test User",
+		"GIT_COMMITTER_EMAIL=test@example.com",
+	)
+
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command(args[0], args[1:]...)
+		cmd.Dir = dir
+		cmd.Env = env
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("command %v failed: %v\n%s", args, err, out)
+		}
+	}
+
+	run("git", "init")
+	run("git", "config", "user.name", "Test User")
+	run("git", "config", "user.email", "test@example.com")
+
+	// Commit on main branch
+	os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\n"), 0644)
+	run("git", "add", "main.go")
+	run("git", "commit", "-m", "initial commit")
+
+	// Create and switch to a feature branch
+	run("git", "checkout", "-b", "feature-branch")
+	os.WriteFile(filepath.Join(dir, "feature.go"), []byte("package main\n"), 0644)
+	run("git", "add", "feature.go")
+	run("git", "commit", "-m", "feat: add feature")
+
+	// Switch back to main and add a diverging commit
+	run("git", "checkout", "master")
+	os.WriteFile(filepath.Join(dir, "other.go"), []byte("package main\n"), 0644)
+	run("git", "add", "other.go")
+	run("git", "commit", "-m", "add other file")
+
+	// Merge the feature branch (creates a merge commit)
+	run("git", "merge", "feature-branch", "--no-ff", "-m", "Merge branch feature-branch")
+
+	since := time.Now().Add(-1 * time.Hour)
+	commits, err := git.ReadCommits(dir, since)
+	if err != nil {
+		t.Fatalf("ReadCommits: %v", err)
+	}
+
+	// The merge commit should be excluded by --no-merges
+	for _, c := range commits {
+		if c.Message == "Merge branch feature-branch" {
+			t.Fatal("merge commit should have been excluded by --no-merges flag")
+		}
+	}
+
+	// We should have exactly 3 non-merge commits: initial, feat, other
+	if len(commits) != 3 {
+		t.Fatalf("expected 3 non-merge commits, got %d", len(commits))
+	}
+}
+
+func TestReadCommits_FileRenames(t *testing.T) {
+	dir := t.TempDir()
+	dir, _ = filepath.EvalSymlinks(dir)
+
+	env := append(os.Environ(),
+		"GIT_CONFIG_GLOBAL=/dev/null",
+		"GIT_AUTHOR_NAME=Test User",
+		"GIT_AUTHOR_EMAIL=test@example.com",
+		"GIT_COMMITTER_NAME=Test User",
+		"GIT_COMMITTER_EMAIL=test@example.com",
+	)
+
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command(args[0], args[1:]...)
+		cmd.Dir = dir
+		cmd.Env = env
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("command %v failed: %v\n%s", args, err, out)
+		}
+	}
+
+	run("git", "init")
+	run("git", "config", "user.name", "Test User")
+	run("git", "config", "user.email", "test@example.com")
+
+	// Create initial file
+	os.WriteFile(filepath.Join(dir, "old_name.go"), []byte("package main\n\nfunc OldFunc() {}\n"), 0644)
+	run("git", "add", "old_name.go")
+	run("git", "commit", "-m", "add old_name.go")
+
+	// Rename the file using git mv
+	run("git", "mv", "old_name.go", "new_name.go")
+	run("git", "commit", "-m", "refactor: rename old_name to new_name")
+
+	since := time.Now().Add(-1 * time.Hour)
+	commits, err := git.ReadCommits(dir, since)
+	if err != nil {
+		t.Fatalf("ReadCommits: %v", err)
+	}
+
+	// Find the rename commit
+	for _, c := range commits {
+		if c.Message == "refactor: rename old_name to new_name" {
+			// Without -M flag, git diff-tree reports a rename as a delete + add (2 entries).
+			// The code's parseAction handles R-status when -M is present, but without it
+			// we get D (old file) and A (new file).
+			if len(c.FilesChanged) != 2 {
+				t.Fatalf("expected 2 file changes for rename (delete + add), got %d", len(c.FilesChanged))
+			}
+
+			found := map[string]string{}
+			for _, f := range c.FilesChanged {
+				found[f.Path] = f.Action
+			}
+			if found["old_name.go"] != "deleted" {
+				t.Errorf("expected old_name.go deleted, got '%s'", found["old_name.go"])
+			}
+			if found["new_name.go"] != "added" {
+				t.Errorf("expected new_name.go added, got '%s'", found["new_name.go"])
+			}
+			return
+		}
+	}
+	t.Fatal("commit 'refactor: rename old_name to new_name' not found")
+}
+
+func TestReadCommits_CorrectFilesChangedPerCommit(t *testing.T) {
+	dir := initTestRepoWithCommits(t)
+
+	since := time.Now().Add(-1 * time.Hour)
+	commits, err := git.ReadCommits(dir, since)
+	if err != nil {
+		t.Fatalf("ReadCommits: %v", err)
+	}
+
+	// Build a map of message -> files for easy lookup
+	expected := map[string]map[string]string{
+		"feat: add main.go": {
+			"main.go": "added",
+		},
+		"test: add initial tests": {
+			"main_test.go": "added",
+		},
+		"implement helper function": {
+			"main.go":  "modified",
+			"utils.go": "added",
+		},
+		"fix: remove unused utils": {
+			"utils.go": "deleted",
+		},
+	}
+
+	for _, c := range commits {
+		want, ok := expected[c.Message]
+		if !ok {
+			t.Errorf("unexpected commit message: %s", c.Message)
+			continue
+		}
+
+		if len(c.FilesChanged) != len(want) {
+			t.Errorf("commit %q: expected %d files, got %d", c.Message, len(want), len(c.FilesChanged))
+			continue
+		}
+
+		got := map[string]string{}
+		for _, f := range c.FilesChanged {
+			got[f.Path] = f.Action
+		}
+
+		for path, wantAction := range want {
+			gotAction, exists := got[path]
+			if !exists {
+				t.Errorf("commit %q: missing file %s", c.Message, path)
+			} else if gotAction != wantAction {
+				t.Errorf("commit %q, file %s: expected action %q, got %q", c.Message, path, wantAction, gotAction)
+			}
+		}
+	}
+}
+
+func TestGetCurrentBranch_AfterCheckout(t *testing.T) {
+	dir := initTestRepoWithCommits(t)
+
+	env := append(os.Environ(),
+		"GIT_CONFIG_GLOBAL=/dev/null",
+		"GIT_AUTHOR_NAME=Test User",
+		"GIT_AUTHOR_EMAIL=test@example.com",
+		"GIT_COMMITTER_NAME=Test User",
+		"GIT_COMMITTER_EMAIL=test@example.com",
+	)
+
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command(args[0], args[1:]...)
+		cmd.Dir = dir
+		cmd.Env = env
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("command %v failed: %v\n%s", args, err, out)
+		}
+	}
+
+	// Create and switch to a new branch
+	run("git", "checkout", "-b", "my-feature-branch")
+
+	branch, err := git.GetCurrentBranch(dir)
+	if err != nil {
+		t.Fatalf("GetCurrentBranch: %v", err)
+	}
+
+	if branch != "my-feature-branch" {
+		t.Errorf("expected branch 'my-feature-branch', got '%s'", branch)
+	}
+
+	// Switch to another branch
+	run("git", "checkout", "-b", "another-branch")
+
+	branch, err = git.GetCurrentBranch(dir)
+	if err != nil {
+		t.Fatalf("GetCurrentBranch after second checkout: %v", err)
+	}
+
+	if branch != "another-branch" {
+		t.Errorf("expected branch 'another-branch', got '%s'", branch)
+	}
+}

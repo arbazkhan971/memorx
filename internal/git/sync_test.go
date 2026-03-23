@@ -295,3 +295,66 @@ func TestSyncCommits_NewCommitsAfterSync(t *testing.T) {
 		t.Errorf("expected 'docs: add new file', got %s", result2.Commits[0].Message)
 	}
 }
+
+func TestSyncCommits_CommitMatchesPlanStep(t *testing.T) {
+	gitRoot, db, featureID, sessionID := setupSyncTest(t)
+
+	// Create a plan with steps that match commit messages
+	planID := uuid.New().String()
+	_, err := db.Writer().Exec(
+		"INSERT INTO plans (id, feature_id, title, content, status) VALUES (?, ?, ?, ?, ?)",
+		planID, featureID, "Implementation Plan", "Plan for implementing features", "active",
+	)
+	if err != nil {
+		t.Fatalf("insert plan: %v", err)
+	}
+
+	stepID := uuid.New().String()
+	_, err = db.Writer().Exec(
+		"INSERT INTO plan_steps (id, plan_id, step_number, title, description, status) VALUES (?, ?, ?, ?, ?, ?)",
+		stepID, planID, 1, "Add main entry point", "Create main.go with the main function", "pending",
+	)
+	if err != nil {
+		t.Fatalf("insert plan step: %v", err)
+	}
+
+	// Sync commits
+	since := time.Now().Add(-1 * time.Hour)
+	result, err := git.SyncCommits(db, gitRoot, featureID, sessionID, since)
+	if err != nil {
+		t.Fatalf("SyncCommits: %v", err)
+	}
+
+	if result.NewCommits != 4 {
+		t.Fatalf("expected 4 new commits, got %d", result.NewCommits)
+	}
+
+	// Verify the commit "feat: add main.go" is stored and can be queried
+	// alongside the plan step for the same feature
+	var commitMsg string
+	err = db.Reader().QueryRow(`
+		SELECT c.message FROM commits c
+		JOIN plan_steps ps ON ps.plan_id IN (SELECT id FROM plans WHERE feature_id = c.feature_id)
+		WHERE c.message LIKE '%add main%'
+		AND ps.title LIKE '%Add main%'
+		LIMIT 1
+	`).Scan(&commitMsg)
+	if err != nil {
+		t.Fatalf("query commit matching plan step: %v", err)
+	}
+	if commitMsg != "feat: add main.go" {
+		t.Errorf("expected commit message 'feat: add main.go', got '%s'", commitMsg)
+	}
+
+	// Verify the synced commit has correct intent classification
+	var intentType string
+	err = db.Reader().QueryRow(
+		"SELECT intent_type FROM commits WHERE message = ?", "feat: add main.go",
+	).Scan(&intentType)
+	if err != nil {
+		t.Fatalf("query intent_type: %v", err)
+	}
+	if intentType != "feature" {
+		t.Errorf("expected intent_type 'feature', got '%s'", intentType)
+	}
+}
