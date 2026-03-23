@@ -155,6 +155,22 @@ func TestAutoLink_ReturnsZeroForVeryShortContent(t *testing.T) {
 	}
 }
 
+func TestAutoLink_ContentMatchingMultipleNotes(t *testing.T) {
+	store := newTestStore(t)
+	f, _ := store.CreateFeature("multi-match", "Multi match test")
+	store.CreateNote(f.ID, "", "database performance tuning and optimization", "note")
+	store.CreateNote(f.ID, "", "database schema migration for PostgreSQL", "note")
+	store.CreateNote(f.ID, "", "database backup and recovery procedures", "note")
+	fact, _ := store.CreateFact(f.ID, "", "system", "uses", "database")
+
+	count, err := store.AutoLink(fact.ID, "fact", "database performance schema migration")
+	if err != nil {
+		t.Fatalf("AutoLink: %v", err)
+	}
+	// Should create links to at least some of the matching notes
+	t.Logf("AutoLink created %d links to multiple matching notes", count)
+}
+
 func TestAutoLink(t *testing.T) {
 	store := newTestStore(t)
 

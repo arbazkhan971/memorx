@@ -369,3 +369,31 @@ func TestGetContext_NoLastSessionSummaryWhenNoPrevious(t *testing.T) {
 		t.Errorf("expected empty LastSessionSummary, got %q", ctx.LastSessionSummary)
 	}
 }
+
+func TestGetContext_TiersDifferInData(t *testing.T) {
+	store := newTestStore(t)
+	f, _ := store.CreateFeature("tier-diff", "Tier comparison")
+	store.CreateNote(f.ID, "", "A note", "note")
+	store.CreateFact(f.ID, "", "lang", "is", "Go")
+	store.CreateSession(f.ID, "test")
+
+	compact, _ := store.GetContext(f.ID, "compact", nil)
+	standard, _ := store.GetContext(f.ID, "standard", nil)
+	detailed, _ := store.GetContext(f.ID, "detailed", nil)
+
+	if len(compact.RecentNotes) != 0 {
+		t.Error("compact should have 0 notes")
+	}
+	if len(standard.RecentNotes) == 0 {
+		t.Error("standard should have notes")
+	}
+	if len(detailed.SessionHistory) == 0 {
+		t.Error("detailed should have sessions")
+	}
+	if len(compact.ActiveFacts) != 0 {
+		t.Error("compact should have 0 facts")
+	}
+	if len(standard.ActiveFacts) == 0 {
+		t.Error("standard should have facts")
+	}
+}

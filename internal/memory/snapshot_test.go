@@ -414,6 +414,34 @@ func TestWriteSnapshot_MultipleFeaturesVariousStatuses(t *testing.T) {
 	}
 }
 
+func TestWriteSnapshot_PlanProgressIncluded(t *testing.T) {
+	dir := t.TempDir()
+	db, _ := storage.NewDB(filepath.Join(dir, "test.db"))
+	t.Cleanup(func() { db.Close() })
+	storage.Migrate(db)
+	store := memory.NewStore(db)
+
+	feat, _ := store.StartFeature("plan-snap", "Plan snapshot test")
+	db.Writer().Exec(`INSERT INTO plans (id, feature_id, title, content, status) VALUES ('p1', ?, 'Snap Plan', 'c', 'active')`, feat.ID)
+	db.Writer().Exec(`INSERT INTO plan_steps (id, plan_id, step_number, title, status) VALUES ('s1', 'p1', 1, 'Step1', 'completed')`)
+	db.Writer().Exec(`INSERT INTO plan_steps (id, plan_id, step_number, title, status) VALUES ('s2', 'p1', 2, 'Step2', 'pending')`)
+
+	memDir := filepath.Join(dir, ".mem")
+	os.MkdirAll(memDir, 0755)
+	if err := store.WriteSnapshot(memDir, "proj", "/p"); err != nil {
+		t.Fatalf("WriteSnapshot: %v", err)
+	}
+	data, _ := os.ReadFile(filepath.Join(memDir, "current.json"))
+	var snap memory.Snapshot
+	json.Unmarshal(data, &snap)
+	if snap.ActivePlan == nil {
+		t.Fatal("expected non-nil active_plan")
+	}
+	if snap.ActivePlan.StepsDone != 1 || snap.ActivePlan.StepsTotal != 2 {
+		t.Errorf("expected 1/2 steps, got %d/%d", snap.ActivePlan.StepsDone, snap.ActivePlan.StepsTotal)
+	}
+}
+
 func TestWriteSnapshot_JSONIsValid(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "test.db")

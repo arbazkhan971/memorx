@@ -1,6 +1,7 @@
 package memory_test
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -236,6 +237,19 @@ func TestQueryFactsAsOf(t *testing.T) {
 	}
 	if len(pastFacts) != 0 {
 		t.Fatalf("expected 0 facts in the past, got %d", len(pastFacts))
+	}
+}
+
+func TestCreateFact_VeryLongStrings(t *testing.T) {
+	store := newTestStore(t)
+	f, _ := store.CreateFeature("long-fact", "Long strings")
+	long := strings.Repeat("abcdefghij", 500) // 5000 chars
+	fact, err := store.CreateFact(f.ID, "", long, long, long)
+	if err != nil {
+		t.Fatalf("CreateFact long: %v", err)
+	}
+	if fact.Subject != long {
+		t.Error("subject mismatch for long string")
 	}
 }
 

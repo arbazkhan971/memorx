@@ -521,6 +521,40 @@ func TestRunScenario_PlanSetup(t *testing.T) {
 	}
 }
 
+func TestAllScenarios_ReturnsExactly70(t *testing.T) {
+	scenarios := AllScenarios()
+	if len(scenarios) != 70 {
+		t.Errorf("expected 70 scenarios, got %d", len(scenarios))
+	}
+}
+
+func TestScenariosByAbility_CorrectCounts(t *testing.T) {
+	all := AllScenarios()
+	counts := map[string]int{}
+	for _, s := range all {
+		counts[s.Ability]++
+	}
+	// Verify every ability has at least 1 scenario
+	if len(counts) == 0 {
+		t.Fatal("no abilities found")
+	}
+	// Verify ScenariosByAbility matches manual count
+	for ability, expected := range counts {
+		got := len(ScenariosByAbility(ability))
+		if got != expected {
+			t.Errorf("ability %q: expected %d scenarios, got %d", ability, expected, got)
+		}
+	}
+	// Verify the total adds up
+	total := 0
+	for _, c := range counts {
+		total += c
+	}
+	if total != 70 {
+		t.Errorf("expected 70 total scenarios, got %d", total)
+	}
+}
+
 // TestScoring_Unit directly exercises the scoring logic in RunScenario for edge cases.
 func TestScoring_Unit(t *testing.T) {
 	tests := []struct {

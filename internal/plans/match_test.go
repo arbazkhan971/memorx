@@ -167,6 +167,31 @@ func TestMatchCommitToSteps_VeryShortCommitMessage(t *testing.T) {
 	}
 }
 
+func TestMatchCommitToSteps_ExactTitleMatch(t *testing.T) {
+	db := setupTestDB(t)
+	mgr := plans.NewManager(db)
+	featureID := createTestFeature(t, db)
+	sessionID := createTestSession(t, db, featureID)
+	steps := []plans.StepInput{
+		{Title: "Implement user authentication"},
+		{Title: "Write integration tests"},
+	}
+	_, err := mgr.CreatePlan(featureID, sessionID, "Plan", "", "test", steps)
+	if err != nil {
+		t.Fatalf("CreatePlan: %v", err)
+	}
+	match, err := mgr.MatchCommitToSteps("implement user authentication", featureID)
+	if err != nil {
+		t.Fatalf("MatchCommitToSteps: %v", err)
+	}
+	if match == nil {
+		t.Fatal("expected exact title match, got nil")
+	}
+	if match.Title != "Implement user authentication" {
+		t.Errorf("expected exact match, got %q", match.Title)
+	}
+}
+
 func TestMatchCommitToSteps_MatchesDescription(t *testing.T) {
 	db := setupTestDB(t)
 	mgr := plans.NewManager(db)

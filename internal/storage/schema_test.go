@@ -98,6 +98,26 @@ func TestMigrate_ConsolidationStateInitialized(t *testing.T) {
 	}
 }
 
+func TestMigrate_VersionTracking(t *testing.T) {
+	dir := t.TempDir()
+	db, err := storage.NewDB(filepath.Join(dir, "version.db"))
+	if err != nil {
+		t.Fatalf("NewDB: %v", err)
+	}
+	defer db.Close()
+	if err := storage.Migrate(db); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	var maxVersion int
+	err = db.Reader().QueryRow("SELECT MAX(version) FROM schema_version").Scan(&maxVersion)
+	if err != nil {
+		t.Fatalf("query version: %v", err)
+	}
+	if maxVersion < 2 {
+		t.Errorf("expected version >= 2, got %d", maxVersion)
+	}
+}
+
 func TestMigrate_PreExistingDataNotCorrupted(t *testing.T) {
 	dir := t.TempDir()
 	db, err := storage.NewDB(filepath.Join(dir, "memory.db"))

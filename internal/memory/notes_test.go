@@ -235,6 +235,49 @@ func TestCreateNote_EachNoteType(t *testing.T) {
 	}
 }
 
+func TestListNotes_FilterBlocker(t *testing.T) {
+	store := newTestStore(t)
+	f, _ := store.CreateFeature("filter-blocker", "Filter")
+	store.CreateNote(f.ID, "", "b1", "blocker")
+	store.CreateNote(f.ID, "", "n1", "note")
+	notes, err := store.ListNotes(f.ID, "blocker", 10)
+	if err != nil {
+		t.Fatalf("ListNotes blocker: %v", err)
+	}
+	if len(notes) != 1 || notes[0].Type != "blocker" {
+		t.Errorf("expected 1 blocker, got %d", len(notes))
+	}
+}
+
+func TestListNotes_FilterNextStep(t *testing.T) {
+	store := newTestStore(t)
+	f, _ := store.CreateFeature("filter-ns", "Filter")
+	store.CreateNote(f.ID, "", "ns1", "next_step")
+	store.CreateNote(f.ID, "", "ns2", "next_step")
+	store.CreateNote(f.ID, "", "p1", "progress")
+	notes, err := store.ListNotes(f.ID, "next_step", 10)
+	if err != nil {
+		t.Fatalf("ListNotes next_step: %v", err)
+	}
+	if len(notes) != 2 {
+		t.Errorf("expected 2 next_step, got %d", len(notes))
+	}
+}
+
+func TestListNotes_FilterProgress(t *testing.T) {
+	store := newTestStore(t)
+	f, _ := store.CreateFeature("filter-prog", "Filter")
+	store.CreateNote(f.ID, "", "p1", "progress")
+	store.CreateNote(f.ID, "", "d1", "decision")
+	notes, err := store.ListNotes(f.ID, "progress", 10)
+	if err != nil {
+		t.Fatalf("ListNotes progress: %v", err)
+	}
+	if len(notes) != 1 || notes[0].Type != "progress" {
+		t.Errorf("expected 1 progress, got %d", len(notes))
+	}
+}
+
 func TestListNotes_OrderNewestFirst(t *testing.T) {
 	store := newTestStore(t)
 

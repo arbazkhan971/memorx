@@ -274,6 +274,26 @@ func TestForgetByID_NotFound(t *testing.T) {
 	}
 }
 
+func TestForgetByID_InvalidUUID(t *testing.T) {
+	store := newTestStore(t)
+	_, err := store.ForgetByID("not-a-valid-uuid-at-all")
+	if err == nil {
+		t.Fatal("expected error for invalid ID")
+	}
+}
+
+func TestGetMemoryHealth_ScoreIs100ForCleanFeature(t *testing.T) {
+	store := newTestStore(t)
+	f, _ := store.CreateFeature("score-100", "Perfect health")
+	h, err := store.GetMemoryHealth(f.ID)
+	if err != nil {
+		t.Fatalf("GetMemoryHealth: %v", err)
+	}
+	if h.Score != 100 {
+		t.Errorf("expected score 100, got %f", h.Score)
+	}
+}
+
 func TestGetMemoryHealth_ScoreCappedAtZero(t *testing.T) {
 	store, db := newTestStoreWithDB(t)
 

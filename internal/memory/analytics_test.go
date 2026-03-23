@@ -300,6 +300,24 @@ func TestGetProjectAnalytics_EmptyDB(t *testing.T) {
 	}
 }
 
+func TestGetFeatureAnalytics_ZeroSessions(t *testing.T) {
+	store := newTestStore(t)
+	f, _ := store.CreateFeature("zero-sessions", "No sessions")
+	a, err := store.GetFeatureAnalytics(f.ID)
+	if err != nil {
+		t.Fatalf("GetFeatureAnalytics: %v", err)
+	}
+	if a.SessionCount != 0 {
+		t.Errorf("expected 0 sessions, got %d", a.SessionCount)
+	}
+	if a.AvgSessionDuration != "n/a" {
+		t.Errorf("expected avg duration 'n/a', got %q", a.AvgSessionDuration)
+	}
+	if a.PlanProgress != "no plan" {
+		t.Errorf("expected 'no plan', got %q", a.PlanProgress)
+	}
+}
+
 func TestGetFeatureAnalytics_NotFound(t *testing.T) {
 	store := newTestStore(t)
 

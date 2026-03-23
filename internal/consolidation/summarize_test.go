@@ -276,6 +276,23 @@ func TestGenerateSummaries_ContentIncludesNoteTypes(t *testing.T) {
 	}
 }
 
+func TestGenerateSummaries_LessThan20NotesNoSummary(t *testing.T) {
+	db := newTestDB(t)
+	engine := consolidation.NewEngine(db, consolidation.DefaultConfig())
+	featureID := uuid.New().String()
+	db.Writer().Exec(`INSERT INTO features (id, name, description) VALUES (?, ?, ?)`, featureID, "few-notes", "test")
+	for i := 0; i < 19; i++ {
+		insertTestNote(t, db, featureID, fmt.Sprintf("note %d", i), "note")
+	}
+	count, err := engine.GenerateSummaries(featureID)
+	if err != nil {
+		t.Fatalf("GenerateSummaries: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("expected 0 summaries for <20 notes, got %d", count)
+	}
+}
+
 func TestGenerateSummaries_EmptyFeature(t *testing.T) {
 	db := newTestDB(t)
 	engine := consolidation.NewEngine(db, consolidation.DefaultConfig())

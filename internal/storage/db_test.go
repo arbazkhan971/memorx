@@ -126,6 +126,34 @@ func TestNewDB_PathReturnsCorrectPath(t *testing.T) {
 	}
 }
 
+func TestNewDB_ReopenExistingFile(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "reopen.db")
+
+	db1, err := storage.NewDB(dbPath)
+	if err != nil {
+		t.Fatalf("first open: %v", err)
+	}
+	storage.Migrate(db1)
+	db1.Writer().Exec(`INSERT INTO features (id, name, status) VALUES ('f1', 'persist', 'active')`)
+	db1.Close()
+
+	db2, err := storage.NewDB(dbPath)
+	if err != nil {
+		t.Fatalf("second open: %v", err)
+	}
+	defer db2.Close()
+
+	var name string
+	err = db2.Reader().QueryRow(`SELECT name FROM features WHERE id = 'f1'`).Scan(&name)
+	if err != nil {
+		t.Fatalf("query after reopen: %v", err)
+	}
+	if name != "persist" {
+		t.Errorf("expected 'persist', got %q", name)
+	}
+}
+
 func TestNewDB_ForeignKeysEnabled(t *testing.T) {
 	dir := t.TempDir()
 	db, err := storage.NewDB(filepath.Join(dir, "memory.db"))

@@ -387,6 +387,29 @@ func TestClassifyIntent_AllFileTypes_NoFiles(t *testing.T) {
 	}
 }
 
+func TestClassifyIntent_ConfidenceTiers(t *testing.T) {
+	// Conventional prefix = 0.9
+	_, c1 := git.ClassifyIntent("feat: new", nil)
+	if c1 != 0.9 {
+		t.Errorf("conventional: expected 0.9, got %f", c1)
+	}
+	// Keyword = 0.8
+	_, c2 := git.ClassifyIntent("Add login page", nil)
+	if c2 != 0.8 {
+		t.Errorf("keyword: expected 0.8, got %f", c2)
+	}
+	// File signal = 0.6
+	_, c3 := git.ClassifyIntent("changes", []string{"foo_test.go"})
+	if c3 != 0.6 {
+		t.Errorf("file signal: expected 0.6, got %f", c3)
+	}
+	// Unknown = 0.0
+	_, c4 := git.ClassifyIntent("v2.0.0", nil)
+	if c4 != 0.0 {
+		t.Errorf("unknown: expected 0.0, got %f", c4)
+	}
+}
+
 func TestClassifyIntent_MultipleKeywords_FirstMatchWins(t *testing.T) {
 	// The tokenizer splits the message into words and iterates over them in order.
 	// The first matching keyword determines the intent type.

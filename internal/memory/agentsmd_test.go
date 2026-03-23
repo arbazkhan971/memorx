@@ -194,6 +194,17 @@ func TestGenerateAgentsMD_WithNextSteps(t *testing.T) {
 	}
 }
 
+func TestGenerateAgentsMD_ContainsBriefingText(t *testing.T) {
+	store := newTestStore(t)
+	md, err := store.GenerateAgentsMD()
+	if err != nil {
+		t.Fatalf("GenerateAgentsMD: %v", err)
+	}
+	if !strings.Contains(md, "devmem_briefing") {
+		t.Error("expected AGENTS.md to contain devmem_briefing text")
+	}
+}
+
 func TestGenerateAgentsMD_MultilineNotesFlattenedToSingleLine(t *testing.T) {
 	store := newTestStore(t)
 

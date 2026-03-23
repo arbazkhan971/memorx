@@ -759,6 +759,73 @@ func TestSearchWithLimitOne(t *testing.T) {
 	}
 }
 
+func TestSearch_EmptyTypesSearchesAll(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	insertFeature(t, db, "f1", "all-types-feat")
+	insertNote(t, db, "n1", "f1", "searching all types note content", "progress", now())
+	insertCommit(t, db, "c1", "f1", "h111", "searching all types commit", "feature", now())
+
+	engine := search.NewEngine(db)
+	results, err := engine.Search("searching", "all_features", nil, "", 20)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	types := map[string]bool{}
+	for _, r := range results {
+		types[r.Type] = true
+	}
+	if !types["note"] || !types["commit"] {
+		t.Errorf("empty types should search all, got types: %v", types)
+	}
+}
+
+func TestSearch_SingleTypeFilter(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	insertFeature(t, db, "f1", "single-type-feat")
+	insertNote(t, db, "n1", "f1", "filtering single type content", "progress", now())
+	insertCommit(t, db, "c1", "f1", "h222", "filtering single type commit", "feature", now())
+
+	engine := search.NewEngine(db)
+	results, err := engine.Search("filtering", "all_features", []string{"commits"}, "", 20)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	for _, r := range results {
+		if r.Type != "commit" {
+			t.Errorf("expected only commit type, got %s", r.Type)
+		}
+	}
+}
+
+func TestTraverseLinks_MaxDepthZeroReturnsMinDepthOne(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	insertFeature(t, db, "f1", "depth-zero")
+	insertNote(t, db, "n1", "f1", "root", "note", now())
+	insertNote(t, db, "n2", "f1", "linked", "note", now())
+	insertLink(t, db, "l1", "n1", "note", "n2", "note", "related", 0.8)
+
+	engine := search.NewEngine(db)
+	// maxDepth=0 is clamped to 1 in the implementation
+	linked, err := engine.TraverseLinks("n1", "note", 0)
+	if err != nil {
+		t.Fatalf("TraverseLinks: %v", err)
+	}
+	// Should find n2 at depth 1 (maxDepth clamped to 1)
+	if len(linked) != 1 {
+		t.Errorf("expected 1 linked memory (clamped to depth 1), got %d", len(linked))
+	}
+}
+
+func TestScore_AllZeroValues(t *testing.T) {
+	score := search.Score(0.0, now(), "note", 0)
+	if score != 0.0 {
+		t.Errorf("expected 0.0 for zero BM25, got %f", score)
+	}
+}
+
 func TestSearchSpecialCharactersInQuery(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()

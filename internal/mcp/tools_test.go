@@ -894,6 +894,82 @@ func TestHandleEndSession_MissingSummary(t *testing.T) {
 	}
 }
 
+func TestHandleForget_StaleFacts(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	ctx := context.Background()
+	_, _ = srv.handleStartFeature(ctx, newReq("devmem_start_feature", map[string]interface{}{"name": "forget-stale"}))
+
+	res, err := srv.handleForget(ctx, newReq("devmem_forget", map[string]interface{}{"what": "stale_facts"}))
+	if err != nil {
+		t.Fatalf("handleForget: %v", err)
+	}
+	text := resultText(t, res)
+	if !strings.Contains(text, "stale facts") {
+		t.Errorf("expected stale facts message, got: %s", text)
+	}
+}
+
+func TestHandleForget_StaleNotes(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	ctx := context.Background()
+	_, _ = srv.handleStartFeature(ctx, newReq("devmem_start_feature", map[string]interface{}{"name": "forget-notes"}))
+
+	res, err := srv.handleForget(ctx, newReq("devmem_forget", map[string]interface{}{"what": "stale_notes"}))
+	if err != nil {
+		t.Fatalf("handleForget: %v", err)
+	}
+	text := resultText(t, res)
+	if !strings.Contains(text, "stale notes") {
+		t.Errorf("expected stale notes message, got: %s", text)
+	}
+}
+
+func TestHandleForget_CompletedFeatures(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	ctx := context.Background()
+
+	res, err := srv.handleForget(ctx, newReq("devmem_forget", map[string]interface{}{"what": "completed_features"}))
+	if err != nil {
+		t.Fatalf("handleForget: %v", err)
+	}
+	text := resultText(t, res)
+	if !strings.Contains(text, "completed features") {
+		t.Errorf("expected completed features message, got: %s", text)
+	}
+}
+
+func TestHandleGenerateRules_DryRun(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	ctx := context.Background()
+
+	res, err := srv.handleGenerateRules(ctx, newReq("devmem_generate_rules", map[string]interface{}{"dry_run": true}))
+	if err != nil {
+		t.Fatalf("handleGenerateRules: %v", err)
+	}
+	text := resultText(t, res)
+	if !strings.Contains(text, "Preview") {
+		t.Errorf("dry_run should contain 'Preview', got: %s", text)
+	}
+	if !strings.Contains(text, "AGENTS.md") {
+		t.Errorf("dry_run should contain AGENTS.md content, got: %s", text)
+	}
+}
+
+func TestHandleAnalytics_NoFeatures(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	ctx := context.Background()
+
+	res, err := srv.handleAnalytics(ctx, newReq("devmem_analytics", map[string]interface{}{}))
+	if err != nil {
+		t.Fatalf("handleAnalytics: %v", err)
+	}
+	text := resultText(t, res)
+	// Without specifying a feature, it should show project analytics
+	if !strings.Contains(text, "Project") || !strings.Contains(text, "0") {
+		t.Errorf("expected project analytics with 0 counts, got: %s", text)
+	}
+}
+
 func TestHandleEndSession_SummaryAppearsInContext(t *testing.T) {
 	srv, _ := setupTestServer(t)
 	ctx := context.Background()

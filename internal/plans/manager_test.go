@@ -3,6 +3,7 @@ package plans_test
 import (
 	"encoding/json"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/arbaz/devmem/internal/plans"
@@ -337,6 +338,42 @@ func TestUpdateStepStatus(t *testing.T) {
 	}
 	if updated[0].CompletedAt == "" {
 		t.Error("expected completed_at to be set")
+	}
+}
+
+func TestCreatePlan_VeryLongTitle(t *testing.T) {
+	db := setupTestDB(t)
+	mgr := plans.NewManager(db)
+	featureID := createTestFeature(t, db)
+	sessionID := createTestSession(t, db, featureID)
+	longTitle := strings.Repeat("A very long plan title ", 100)
+	plan, err := mgr.CreatePlan(featureID, sessionID, longTitle, "", "test", []plans.StepInput{{Title: "Step"}})
+	if err != nil {
+		t.Fatalf("CreatePlan long title: %v", err)
+	}
+	if plan.Title != longTitle {
+		t.Error("title mismatch for long title")
+	}
+}
+
+func TestGetPlanSteps_Ordering(t *testing.T) {
+	db := setupTestDB(t)
+	mgr := plans.NewManager(db)
+	featureID := createTestFeature(t, db)
+	sessionID := createTestSession(t, db, featureID)
+	steps := []plans.StepInput{
+		{Title: "Zulu"}, {Title: "Alpha"}, {Title: "Mike"},
+	}
+	plan, err := mgr.CreatePlan(featureID, sessionID, "Order Test", "", "test", steps)
+	if err != nil {
+		t.Fatalf("CreatePlan: %v", err)
+	}
+	got, _ := mgr.GetPlanSteps(plan.ID)
+	if got[0].StepNumber != 1 || got[1].StepNumber != 2 || got[2].StepNumber != 3 {
+		t.Error("steps not ordered by step_number")
+	}
+	if got[0].Title != "Zulu" || got[1].Title != "Alpha" || got[2].Title != "Mike" {
+		t.Error("step titles not in insertion order")
 	}
 }
 

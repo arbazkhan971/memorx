@@ -389,6 +389,19 @@ func TestListFeatures_EmptyDB(t *testing.T) {
 	}
 }
 
+func TestStartFeature_EmptyNameCreatesFeature(t *testing.T) {
+	store := newTestStore(t)
+	// Empty name is technically valid in the current implementation (no validation).
+	// This test documents that behavior.
+	f, err := store.StartFeature("", "empty name test")
+	if err != nil {
+		t.Fatalf("StartFeature empty name: %v", err)
+	}
+	if f.Name != "" {
+		t.Errorf("expected empty name, got %q", f.Name)
+	}
+}
+
 func TestStartFeature_Resume(t *testing.T) {
 	store := newTestStore(t)
 

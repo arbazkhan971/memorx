@@ -107,6 +107,26 @@ func TestDetectContradictions_ResolvesConflict(t *testing.T) {
 	}
 }
 
+func TestDetectContradictions_ThreeConflictingFacts(t *testing.T) {
+	db := newTestDB(t)
+	engine := consolidation.NewEngine(db, consolidation.DefaultConfig())
+	featureID := uuid.New().String()
+	db.Writer().Exec(`INSERT INTO features (id, name, description) VALUES (?, ?, ?)`, featureID, "three-conflict", "test")
+	now := time.Now().UTC()
+	for i, obj := range []string{"A", "B", "C"} {
+		id := uuid.New().String()
+		ts := now.Add(time.Duration(i) * time.Minute).Format(time.DateTime)
+		db.Writer().Exec(`INSERT INTO facts (id, feature_id, subject, predicate, object, valid_at, recorded_at, confidence) VALUES (?, ?, 'x', 'is', ?, ?, ?, 1.0)`, id, featureID, obj, ts, ts)
+	}
+	count, err := engine.DetectContradictions()
+	if err != nil {
+		t.Fatalf("DetectContradictions: %v", err)
+	}
+	if count != 2 {
+		t.Errorf("expected 2 invalidated (keep newest C), got %d", count)
+	}
+}
+
 func TestDetectContradictions_MultipleGroups(t *testing.T) {
 	db := newTestDB(t)
 	engine := consolidation.NewEngine(db, consolidation.DefaultConfig())
