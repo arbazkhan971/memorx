@@ -2,6 +2,7 @@ package storage
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,34 +10,39 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// DB manages SQLite connections with WAL mode.
-// Single writer + multiple readers for concurrent MCP client access.
+const pragmas = "_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(ON)"
+
 type DB struct {
 	writer *sql.DB
 	reader *sql.DB
 	path   string
 }
 
+func openDB(dsn string, maxConns int) (*sql.DB, error) {
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, err
+	}
+	db.SetMaxOpenConns(maxConns)
+	return db, nil
+}
+
 func NewDB(dbPath string) (*DB, error) {
-	dir := filepath.Dir(dbPath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0755); err != nil {
 		return nil, fmt.Errorf("create db directory: %w", err)
 	}
 
-	writer, err := sql.Open("sqlite", dbPath+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(ON)")
+	writer, err := openDB(dbPath+"?"+pragmas+"&_pragma=synchronous(NORMAL)", 1)
 	if err != nil {
 		return nil, fmt.Errorf("open writer: %w", err)
 	}
-	writer.SetMaxOpenConns(1)
 
-	reader, err := sql.Open("sqlite", dbPath+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(ON)")
+	reader, err := openDB(dbPath+"?"+pragmas, 4)
 	if err != nil {
 		writer.Close()
 		return nil, fmt.Errorf("open reader: %w", err)
 	}
-	reader.SetMaxOpenConns(4)
 
-	// Verify WAL mode is active
 	var journalMode string
 	if err := writer.QueryRow("PRAGMA journal_mode").Scan(&journalMode); err != nil {
 		writer.Close()
@@ -52,12 +58,5 @@ func (db *DB) Reader() *sql.DB { return db.reader }
 func (db *DB) Path() string    { return db.path }
 
 func (db *DB) Close() error {
-	var firstErr error
-	if err := db.reader.Close(); err != nil && firstErr == nil {
-		firstErr = err
-	}
-	if err := db.writer.Close(); err != nil && firstErr == nil {
-		firstErr = err
-	}
-	return firstErr
+	return errors.Join(db.reader.Close(), db.writer.Close())
 }
