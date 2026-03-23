@@ -29,6 +29,59 @@ func NewEngine(db *storage.DB) *Engine {
 	return &Engine{db: db}
 }
 
+// ftsTable describes how to search a single FTS5 (or trigram) virtual table.
+type ftsTable struct {
+	typeName    string // search type key: "notes", "commits", "facts", "plans"
+	resultType  string // result Type field: "note", "commit", "fact", "plan"
+	ftsName     string // virtual table name: "notes_fts", "commits_fts", etc.
+	sourceTable string // source table: "notes", "commits", "facts", "plans"
+	alias       string // SQL alias for the source table
+	contentExpr string // SQL expression for the content column (uses alias)
+	typeExpr    string // SQL expression for the type/subtype column (uses alias)
+	timeCol     string // column name for timestamp (uses alias)
+	featureCol  string // column for feature_id filter (uses alias)
+	sourceType  string // source_type value for memory_links count
+	trigramName string // trigram virtual table name, empty if none
+}
+
+var ftsTables = []ftsTable{
+	{
+		typeName: "notes", resultType: "note",
+		ftsName: "notes_fts", sourceTable: "notes", alias: "n",
+		contentExpr: "n.content", typeExpr: "n.type",
+		timeCol: "n.created_at", featureCol: "n.feature_id", sourceType: "note",
+		trigramName: "notes_trigram",
+	},
+	{
+		typeName: "commits", resultType: "commit",
+		ftsName: "commits_fts", sourceTable: "commits", alias: "c",
+		contentExpr: "c.message", typeExpr: "c.intent_type",
+		timeCol: "c.committed_at", featureCol: "c.feature_id", sourceType: "commit",
+		trigramName: "commits_trigram",
+	},
+	{
+		typeName: "facts", resultType: "fact",
+		ftsName: "facts_fts", sourceTable: "facts", alias: "fa",
+		contentExpr: "fa.subject || ' ' || fa.predicate || ' ' || fa.object", typeExpr: "'fact'",
+		timeCol: "fa.valid_at", featureCol: "fa.feature_id", sourceType: "fact",
+	},
+	{
+		typeName: "plans", resultType: "plan",
+		ftsName: "plans_fts", sourceTable: "plans", alias: "p",
+		contentExpr: "p.title || ': ' || p.content", typeExpr: "'plan'",
+		timeCol: "p.created_at", featureCol: "p.feature_id", sourceType: "plan",
+	},
+}
+
+// ftsTableMap provides O(1) lookup by typeName.
+var ftsTableMap = func() map[string]*ftsTable {
+	m := make(map[string]*ftsTable, len(ftsTables))
+	for i := range ftsTables {
+		m[ftsTables[i].typeName] = &ftsTables[i]
+	}
+	return m
+}()
+
 // Search executes a multi-layer search across memory types.
 //
 // query: the search text
@@ -52,7 +105,7 @@ func (e *Engine) Search(query, scope string, types []string, featureID string, l
 	ftsQuery := sanitizeFTSQuery(query)
 
 	// Layer 1: FTS5 + BM25
-	results, err := e.searchFTS(ftsQuery, scope, types, featureID, limit)
+	results, err := e.searchLayer(ftsQuery, scope, types, featureID, limit, false)
 	if err != nil {
 		return nil, fmt.Errorf("fts search: %w", err)
 	}
@@ -61,7 +114,7 @@ func (e *Engine) Search(query, scope string, types []string, featureID string, l
 	}
 
 	// Layer 2: Trigram substring
-	results, err = e.searchTrigram(query, scope, types, featureID, limit)
+	results, err = e.searchLayer(query, scope, types, featureID, limit, true)
 	if err != nil {
 		return nil, fmt.Errorf("trigram search: %w", err)
 	}
@@ -87,24 +140,17 @@ func sanitizeFTSQuery(query string) string {
 	return strings.Join(tokens, " ")
 }
 
-// searchFTS runs FTS5 MATCH queries with BM25 ranking across requested types.
-func (e *Engine) searchFTS(ftsQuery, scope string, types []string, featureID string, limit int) ([]SearchResult, error) {
+// searchLayer runs either FTS5 or trigram queries across requested types.
+func (e *Engine) searchLayer(matchQuery, scope string, types []string, featureID string, limit int, trigram bool) ([]SearchResult, error) {
 	reader := e.db.Reader()
 	var allResults []SearchResult
 
 	for _, typ := range types {
-		var results []SearchResult
-		var err error
-		switch typ {
-		case "notes":
-			results, err = e.searchNotesFTS(reader, ftsQuery, scope, featureID)
-		case "commits":
-			results, err = e.searchCommitsFTS(reader, ftsQuery, scope, featureID)
-		case "facts":
-			results, err = e.searchFactsFTS(reader, ftsQuery, scope, featureID)
-		case "plans":
-			results, err = e.searchPlansFTS(reader, ftsQuery, scope, featureID)
+		tbl, ok := ftsTableMap[typ]
+		if !ok {
+			continue
 		}
+		results, err := e.searchTable(reader, tbl, matchQuery, scope, featureID, trigram)
 		if err != nil {
 			return nil, err
 		}
@@ -118,259 +164,70 @@ func (e *Engine) searchFTS(ftsQuery, scope string, types []string, featureID str
 	return allResults, nil
 }
 
-func (e *Engine) searchNotesFTS(reader *sql.DB, ftsQuery, scope, featureID string) ([]SearchResult, error) {
-	q := `
-SELECT n.id, n.content, n.type, n.created_at, COALESCE(f.name, '') as feature_name,
-       bm25(notes_fts) as rank,
-       (SELECT COUNT(*) FROM memory_links WHERE source_id = n.id AND source_type = 'note') as link_count
-FROM notes_fts
-JOIN notes n ON notes_fts.rowid = n.rowid
-LEFT JOIN features f ON n.feature_id = f.id
-WHERE notes_fts MATCH ?`
+// searchTable executes a single FTS5 or trigram query for one table definition.
+func (e *Engine) searchTable(reader *sql.DB, tbl *ftsTable, matchQuery, scope, featureID string, trigram bool) ([]SearchResult, error) {
+	vtable := tbl.ftsName
+	if trigram {
+		if tbl.trigramName == "" {
+			return nil, nil // this type has no trigram table
+		}
+		vtable = tbl.trigramName
+	}
 
-	args := []interface{}{ftsQuery}
+	// Build SELECT columns: id, content, subtype, timestamp, feature_name, [rank,] link_count
+	rankCol := ""
+	if !trigram {
+		rankCol = fmt.Sprintf(",\n       bm25(%s) as rank", vtable)
+	}
+
+	q := fmt.Sprintf(`
+SELECT %s.id, %s as content, %s as subtype, %s, COALESCE(f.name, '') as feature_name%s,
+       (SELECT COUNT(*) FROM memory_links WHERE source_id = %s.id AND source_type = '%s') as link_count
+FROM %s
+JOIN %s %s ON %s.rowid = %s.rowid
+LEFT JOIN features f ON %s.feature_id = f.id
+WHERE %s MATCH ?`,
+		tbl.alias, tbl.contentExpr, tbl.typeExpr, tbl.timeCol, rankCol,
+		tbl.alias, tbl.sourceType,
+		vtable,
+		tbl.sourceTable, tbl.alias, vtable, tbl.alias,
+		tbl.alias,
+		vtable,
+	)
+
+	args := []interface{}{matchQuery}
 	if scope == "current_feature" && featureID != "" {
-		q += " AND n.feature_id = ?"
+		q += fmt.Sprintf(" AND %s = ?", tbl.featureCol)
 		args = append(args, featureID)
 	}
 
 	rows, err := reader.Query(q, args...)
 	if err != nil {
-		return nil, fmt.Errorf("search notes fts: %w", err)
+		return nil, fmt.Errorf("search %s %s: %w", tbl.typeName, vtable, err)
 	}
 	defer rows.Close()
 
 	var results []SearchResult
 	for rows.Next() {
 		var r SearchResult
-		var noteType string
-		var rank float64
+		var subtype string
 		var linkCount int
-		if err := rows.Scan(&r.ID, &r.Content, &noteType, &r.CreatedAt, &r.FeatureName, &rank, &linkCount); err != nil {
-			return nil, fmt.Errorf("scan notes fts: %w", err)
-		}
-		r.Type = "note"
-		r.Relevance = Score(math.Abs(rank), r.CreatedAt, noteType, linkCount)
-		results = append(results, r)
-	}
-	return results, rows.Err()
-}
-
-func (e *Engine) searchCommitsFTS(reader *sql.DB, ftsQuery, scope, featureID string) ([]SearchResult, error) {
-	q := `
-SELECT c.id, c.message, c.intent_type, c.committed_at, COALESCE(f.name, '') as feature_name,
-       bm25(commits_fts) as rank,
-       (SELECT COUNT(*) FROM memory_links WHERE source_id = c.id AND source_type = 'commit') as link_count
-FROM commits_fts
-JOIN commits c ON commits_fts.rowid = c.rowid
-LEFT JOIN features f ON c.feature_id = f.id
-WHERE commits_fts MATCH ?`
-
-	args := []interface{}{ftsQuery}
-	if scope == "current_feature" && featureID != "" {
-		q += " AND c.feature_id = ?"
-		args = append(args, featureID)
-	}
-
-	rows, err := reader.Query(q, args...)
-	if err != nil {
-		return nil, fmt.Errorf("search commits fts: %w", err)
-	}
-	defer rows.Close()
-
-	var results []SearchResult
-	for rows.Next() {
-		var r SearchResult
-		var intentType string
 		var rank float64
-		var linkCount int
-		if err := rows.Scan(&r.ID, &r.Content, &intentType, &r.CreatedAt, &r.FeatureName, &rank, &linkCount); err != nil {
-			return nil, fmt.Errorf("scan commits fts: %w", err)
-		}
-		r.Type = "commit"
-		r.Relevance = Score(math.Abs(rank), r.CreatedAt, intentType, linkCount)
-		results = append(results, r)
-	}
-	return results, rows.Err()
-}
 
-func (e *Engine) searchFactsFTS(reader *sql.DB, ftsQuery, scope, featureID string) ([]SearchResult, error) {
-	q := `
-SELECT fa.id, fa.subject || ' ' || fa.predicate || ' ' || fa.object as content,
-       'fact' as type, fa.valid_at, COALESCE(f.name, '') as feature_name,
-       bm25(facts_fts) as rank,
-       (SELECT COUNT(*) FROM memory_links WHERE source_id = fa.id AND source_type = 'fact') as link_count
-FROM facts_fts
-JOIN facts fa ON facts_fts.rowid = fa.rowid
-LEFT JOIN features f ON fa.feature_id = f.id
-WHERE facts_fts MATCH ?`
-
-	args := []interface{}{ftsQuery}
-	if scope == "current_feature" && featureID != "" {
-		q += " AND fa.feature_id = ?"
-		args = append(args, featureID)
-	}
-
-	rows, err := reader.Query(q, args...)
-	if err != nil {
-		return nil, fmt.Errorf("search facts fts: %w", err)
-	}
-	defer rows.Close()
-
-	var results []SearchResult
-	for rows.Next() {
-		var r SearchResult
-		var factType string
-		var rank float64
-		var linkCount int
-		if err := rows.Scan(&r.ID, &r.Content, &factType, &r.CreatedAt, &r.FeatureName, &rank, &linkCount); err != nil {
-			return nil, fmt.Errorf("scan facts fts: %w", err)
-		}
-		r.Type = "fact"
-		r.Relevance = Score(math.Abs(rank), r.CreatedAt, factType, linkCount)
-		results = append(results, r)
-	}
-	return results, rows.Err()
-}
-
-func (e *Engine) searchPlansFTS(reader *sql.DB, ftsQuery, scope, featureID string) ([]SearchResult, error) {
-	q := `
-SELECT p.id, p.title || ': ' || p.content as content,
-       'plan' as type, p.created_at, COALESCE(f.name, '') as feature_name,
-       bm25(plans_fts) as rank,
-       (SELECT COUNT(*) FROM memory_links WHERE source_id = p.id AND source_type = 'plan') as link_count
-FROM plans_fts
-JOIN plans p ON plans_fts.rowid = p.rowid
-LEFT JOIN features f ON p.feature_id = f.id
-WHERE plans_fts MATCH ?`
-
-	args := []interface{}{ftsQuery}
-	if scope == "current_feature" && featureID != "" {
-		q += " AND p.feature_id = ?"
-		args = append(args, featureID)
-	}
-
-	rows, err := reader.Query(q, args...)
-	if err != nil {
-		return nil, fmt.Errorf("search plans fts: %w", err)
-	}
-	defer rows.Close()
-
-	var results []SearchResult
-	for rows.Next() {
-		var r SearchResult
-		var planType string
-		var rank float64
-		var linkCount int
-		if err := rows.Scan(&r.ID, &r.Content, &planType, &r.CreatedAt, &r.FeatureName, &rank, &linkCount); err != nil {
-			return nil, fmt.Errorf("scan plans fts: %w", err)
-		}
-		r.Type = "plan"
-		r.Relevance = Score(math.Abs(rank), r.CreatedAt, planType, linkCount)
-		results = append(results, r)
-	}
-	return results, rows.Err()
-}
-
-// searchTrigram runs trigram (substring) searches as Layer 2 fallback.
-// Only notes and commits have trigram tables.
-func (e *Engine) searchTrigram(query, scope string, types []string, featureID string, limit int) ([]SearchResult, error) {
-	reader := e.db.Reader()
-	var allResults []SearchResult
-
-	for _, typ := range types {
-		switch typ {
-		case "notes":
-			results, err := e.searchNotesTrigram(reader, query, scope, featureID)
-			if err != nil {
-				return nil, err
+		if trigram {
+			if err := rows.Scan(&r.ID, &r.Content, &subtype, &r.CreatedAt, &r.FeatureName, &linkCount); err != nil {
+				return nil, fmt.Errorf("scan %s %s: %w", tbl.typeName, vtable, err)
 			}
-			allResults = append(allResults, results...)
-		case "commits":
-			results, err := e.searchCommitsTrigram(reader, query, scope, featureID)
-			if err != nil {
-				return nil, err
+			rank = 1.0
+		} else {
+			if err := rows.Scan(&r.ID, &r.Content, &subtype, &r.CreatedAt, &r.FeatureName, &rank, &linkCount); err != nil {
+				return nil, fmt.Errorf("scan %s %s: %w", tbl.typeName, vtable, err)
 			}
-			allResults = append(allResults, results...)
+			rank = math.Abs(rank)
 		}
-		// facts and plans don't have trigram tables
-	}
 
-	sortByRelevance(allResults)
-	if len(allResults) > limit {
-		allResults = allResults[:limit]
-	}
-	return allResults, nil
-}
-
-func (e *Engine) searchNotesTrigram(reader *sql.DB, query, scope, featureID string) ([]SearchResult, error) {
-	q := `
-SELECT n.id, n.content, n.type, n.created_at, COALESCE(f.name, '') as feature_name,
-       (SELECT COUNT(*) FROM memory_links WHERE source_id = n.id AND source_type = 'note') as link_count
-FROM notes_trigram
-JOIN notes n ON notes_trigram.rowid = n.rowid
-LEFT JOIN features f ON n.feature_id = f.id
-WHERE notes_trigram MATCH ?`
-
-	args := []interface{}{query}
-	if scope == "current_feature" && featureID != "" {
-		q += " AND n.feature_id = ?"
-		args = append(args, featureID)
-	}
-
-	rows, err := reader.Query(q, args...)
-	if err != nil {
-		return nil, fmt.Errorf("search notes trigram: %w", err)
-	}
-	defer rows.Close()
-
-	var results []SearchResult
-	for rows.Next() {
-		var r SearchResult
-		var noteType string
-		var linkCount int
-		if err := rows.Scan(&r.ID, &r.Content, &noteType, &r.CreatedAt, &r.FeatureName, &linkCount); err != nil {
-			return nil, fmt.Errorf("scan notes trigram: %w", err)
-		}
-		r.Type = "note"
-		// Trigram matches get a base BM25-equivalent score of 1.0
-		r.Relevance = Score(1.0, r.CreatedAt, noteType, linkCount)
-		results = append(results, r)
-	}
-	return results, rows.Err()
-}
-
-func (e *Engine) searchCommitsTrigram(reader *sql.DB, query, scope, featureID string) ([]SearchResult, error) {
-	q := `
-SELECT c.id, c.message, c.intent_type, c.committed_at, COALESCE(f.name, '') as feature_name,
-       (SELECT COUNT(*) FROM memory_links WHERE source_id = c.id AND source_type = 'commit') as link_count
-FROM commits_trigram
-JOIN commits c ON commits_trigram.rowid = c.rowid
-LEFT JOIN features f ON c.feature_id = f.id
-WHERE commits_trigram MATCH ?`
-
-	args := []interface{}{query}
-	if scope == "current_feature" && featureID != "" {
-		q += " AND c.feature_id = ?"
-		args = append(args, featureID)
-	}
-
-	rows, err := reader.Query(q, args...)
-	if err != nil {
-		return nil, fmt.Errorf("search commits trigram: %w", err)
-	}
-	defer rows.Close()
-
-	var results []SearchResult
-	for rows.Next() {
-		var r SearchResult
-		var intentType string
-		var linkCount int
-		if err := rows.Scan(&r.ID, &r.Content, &intentType, &r.CreatedAt, &r.FeatureName, &linkCount); err != nil {
-			return nil, fmt.Errorf("scan commits trigram: %w", err)
-		}
-		r.Type = "commit"
-		r.Relevance = Score(1.0, r.CreatedAt, intentType, linkCount)
+		r.Type = tbl.resultType
+		r.Relevance = Score(rank, r.CreatedAt, subtype, linkCount)
 		results = append(results, r)
 	}
 	return results, rows.Err()
