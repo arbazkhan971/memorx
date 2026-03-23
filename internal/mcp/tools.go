@@ -625,6 +625,48 @@ func importNotes(store interface {
 	return count
 }
 
+// handleEndSession implements devmem_end_session.
+func (s *DevMemServer) handleEndSession(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+	summary := getStringArg(req, "summary", "")
+	if summary == "" {
+		return mcplib.NewToolResultError("Parameter 'summary' is required"), nil
+	}
+
+	if s.currentSessionID == "" {
+		return mcplib.NewToolResultError("No active session to end."), nil
+	}
+
+	feature, err := s.store.GetActiveFeature()
+	if err != nil {
+		return mcplib.NewToolResultError("No active feature."), nil
+	}
+
+	// End session with summary.
+	if err := s.store.EndSessionWithSummary(s.currentSessionID, summary); err != nil {
+		return mcplib.NewToolResultError(fmt.Sprintf("Failed to end session: %v", err)), nil
+	}
+
+	// Create a progress note from the summary and auto-link it.
+	note, err := s.store.CreateNote(feature.ID, s.currentSessionID, summary, "progress")
+	if err != nil {
+		return mcplib.NewToolResultError(fmt.Sprintf("Failed to create progress note: %v", err)), nil
+	}
+	linksCreated, _ := s.store.AutoLink(note.ID, "note", summary)
+
+	sessionID := s.currentSessionID
+	s.currentSessionID = ""
+
+	var b strings.Builder
+	b.WriteString("# Session ended\n\n")
+	b.WriteString(fmt.Sprintf("- Session: %s\n", sessionID[:8]))
+	b.WriteString(fmt.Sprintf("- Summary saved: %s\n", truncate(summary, 80)))
+	b.WriteString(fmt.Sprintf("- Progress note created: %s\n", note.ID[:8]))
+	b.WriteString(fmt.Sprintf("- Links created: %d\n", linksCreated))
+	b.WriteString("\nThe next session will see this summary in its context.")
+
+	return mcplib.NewToolResultText(b.String()), nil
+}
+
 // handleExport implements devmem_export.
 func (s *DevMemServer) handleExport(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	featureName := getStringArg(req, "feature_name", "")
@@ -787,6 +829,10 @@ func formatContext(ctx *memory.Context) string {
 		if ctx.Feature.Branch != "" {
 			b.WriteString(fmt.Sprintf("Branch: %s\n", ctx.Feature.Branch))
 		}
+	}
+
+	if ctx.LastSessionSummary != "" {
+		b.WriteString(fmt.Sprintf("\n### Last Session\n%s\n", ctx.LastSessionSummary))
 	}
 
 	if ctx.Summary != "" {

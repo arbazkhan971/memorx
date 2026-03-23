@@ -7,15 +7,16 @@ import (
 )
 
 type Context struct {
-	Feature        *Feature
-	Summary        string
-	Plan           *PlanInfo
-	RecentCommits  []CommitInfo
-	RecentNotes    []Note
-	ActiveFacts    []Fact
-	Links          []MemoryLink
-	SessionHistory []Session
-	FilesTouched   []string
+	Feature            *Feature
+	Summary            string
+	LastSessionSummary string
+	Plan               *PlanInfo
+	RecentCommits      []CommitInfo
+	RecentNotes        []Note
+	ActiveFacts        []Fact
+	Links              []MemoryLink
+	SessionHistory     []Session
+	FilesTouched       []string
 }
 
 type PlanInfo struct {
@@ -64,6 +65,15 @@ func (s *Store) GetContext(featureID, tier string, asOf *time.Time) (*Context, e
 	var summary string
 	if r.QueryRow(`SELECT content FROM summaries WHERE scope = ? ORDER BY generation DESC, created_at DESC LIMIT 1`, featureID).Scan(&summary) == nil {
 		ctx.Summary = summary
+	}
+
+	// Load last ended session's summary (if any).
+	var lastSessSummary string
+	if r.QueryRow(
+		`SELECT COALESCE(summary, '') FROM sessions WHERE feature_id = ? AND ended_at IS NOT NULL AND summary != '' ORDER BY ended_at DESC LIMIT 1`,
+		featureID,
+	).Scan(&lastSessSummary) == nil && lastSessSummary != "" {
+		ctx.LastSessionSummary = lastSessSummary
 	}
 
 	ctx.RecentCommits = s.loadRecentCommits(r, featureID, tc.commits)

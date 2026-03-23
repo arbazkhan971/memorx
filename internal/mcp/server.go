@@ -45,6 +45,16 @@ func (s *DevMemServer) Start() error {
 		if sess, err := s.store.CreateSession(feature.ID, "mcp"); err == nil {
 			s.currentSessionID = sess.ID
 		}
+
+		// Auto-inject context briefing to stderr so the LLM sees it on connect
+		ctxData, err := s.store.GetContext(feature.ID, "standard", nil)
+		if err == nil {
+			// Load session history for the briefing
+			sessions, _ := s.store.ListSessions(feature.ID, 5)
+			ctxData.SessionHistory = sessions
+			briefing := formatBriefing(ctxData, feature)
+			fmt.Fprintf(os.Stderr, "\n%s\n", briefing)
+		}
 	}
 
 	fmt.Fprintf(os.Stderr, "devmem: MCP server starting (stdio)\n")
@@ -54,6 +64,10 @@ func (s *DevMemServer) Start() error {
 // registerTools registers all tool handlers on the MCP server.
 func (s *DevMemServer) registerTools(srv *server.MCPServer) {
 	srv.AddTools(
+		server.ServerTool{
+			Tool:    mcplib.NewTool("devmem_briefing", mcplib.WithDescription("Quick briefing: what you were working on, where you left off, and what to do next. Call this at the start of every conversation.")),
+			Handler: s.handleBriefing,
+		},
 		server.ServerTool{
 			Tool:    mcplib.NewTool("devmem_status", mcplib.WithDescription("Get project status: active feature, plan progress, session info")),
 			Handler: s.handleStatus,
@@ -137,12 +151,26 @@ func (s *DevMemServer) registerTools(srv *server.MCPServer) {
 			Handler: s.handleImportSession,
 		},
 		server.ServerTool{
+			Tool: mcplib.NewTool("devmem_end_session",
+				mcplib.WithDescription("End the current session with a summary of what was accomplished. Call this before closing the conversation to capture session context for next time."),
+				mcplib.WithString("summary", mcplib.Description("Brief summary of what was done this session"), mcplib.Required()),
+			),
+			Handler: s.handleEndSession,
+		},
+		server.ServerTool{
 			Tool: mcplib.NewTool("devmem_export",
 				mcplib.WithDescription("Export a feature's complete memory as markdown. Useful for sharing context with teammates, backing up, or feeding to another tool."),
 				mcplib.WithString("feature_name", mcplib.Description("Feature to export (default: active feature)")),
 				mcplib.WithString("format", mcplib.Description("Export format: markdown or json"), mcplib.Enum("markdown", "json")),
 			),
 			Handler: s.handleExport,
+		},
+		server.ServerTool{
+			Tool: mcplib.NewTool("devmem_analytics",
+				mcplib.WithDescription("Get development analytics and insights: session counts, commit patterns, blocker frequency, feature health. Helps understand where time is spent and what's blocked."),
+				mcplib.WithString("feature", mcplib.Description("Specific feature name (default: project-wide analytics)")),
+			),
+			Handler: s.handleAnalytics,
 		},
 	)
 }

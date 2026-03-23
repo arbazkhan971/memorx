@@ -24,6 +24,12 @@ func Migrate(db *DB) error {
 		}
 	}
 
+	if currentVersion < 2 {
+		if err := applyV2(w); err != nil {
+			return fmt.Errorf("apply v2 migration: %w", err)
+		}
+	}
+
 	return nil
 }
 
@@ -42,6 +48,26 @@ func applyV1(w *sql.DB) error {
 	}
 
 	if _, err := tx.Exec("INSERT OR IGNORE INTO schema_version (version) VALUES (1)"); err != nil {
+		return fmt.Errorf("record version: %w", err)
+	}
+
+	return tx.Commit()
+}
+
+func applyV2(w *sql.DB) error {
+	tx, err := w.Begin()
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Add summary column to sessions table (idempotent: ignore "duplicate column" error).
+	_, err = tx.Exec(`ALTER TABLE sessions ADD COLUMN summary TEXT DEFAULT ''`)
+	if err != nil && !strings.Contains(err.Error(), "duplicate column") {
+		return fmt.Errorf("add summary column: %w", err)
+	}
+
+	if _, err := tx.Exec("INSERT OR IGNORE INTO schema_version (version) VALUES (2)"); err != nil {
 		return fmt.Errorf("record version: %w", err)
 	}
 

@@ -14,13 +14,14 @@ type Session struct {
 	Tool      string
 	StartedAt string
 	EndedAt   string
+	Summary   string
 }
 
-const sessionCols = `id, feature_id, tool, started_at, COALESCE(ended_at, '')`
+const sessionCols = `id, feature_id, tool, started_at, COALESCE(ended_at, ''), COALESCE(summary, '')`
 
 func scanSession(sc interface{ Scan(...any) error }) (Session, error) {
 	var s Session
-	err := sc.Scan(&s.ID, &s.FeatureID, &s.Tool, &s.StartedAt, &s.EndedAt)
+	err := sc.Scan(&s.ID, &s.FeatureID, &s.Tool, &s.StartedAt, &s.EndedAt, &s.Summary)
 	return s, err
 }
 
@@ -35,6 +36,21 @@ func (s *Store) CreateSession(featureID, tool string) (*Session, error) {
 		return nil, fmt.Errorf("create session: %w", err)
 	}
 	return &Session{ID: id, FeatureID: featureID, Tool: tool, StartedAt: now}, nil
+}
+
+func (s *Store) EndSessionWithSummary(sessionID, summary string) error {
+	now := time.Now().UTC().Format(time.DateTime)
+	res, err := s.db.Writer().Exec(
+		`UPDATE sessions SET ended_at = ?, summary = ? WHERE id = ?`,
+		now, summary, sessionID,
+	)
+	if err != nil {
+		return fmt.Errorf("end session with summary: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("session %q not found", sessionID)
+	}
+	return nil
 }
 
 func (s *Store) EndSession(sessionID string) error {
