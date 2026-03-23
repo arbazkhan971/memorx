@@ -237,6 +237,13 @@ func (s *DevMemServer) registerTools(srv *server.MCPServer) {
 			),
 			Handler: s.handleProjectMap,
 		},
+		server.ServerTool{
+			Tool: mcplib.NewTool("devmem_auto_remember",
+				mcplib.WithDescription("Extract and persist key information from conversation text automatically. Pass a block of conversation text and devmem will extract decisions, facts, progress updates, and blockers without manual tagging. Call this periodically or at end of responses."),
+				mcplib.WithString("text", mcplib.Description("Conversation text to extract from"), mcplib.Required()),
+			),
+			Handler: s.handleAutoRemember,
+		},
 	)
 }
 

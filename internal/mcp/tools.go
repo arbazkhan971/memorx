@@ -944,3 +944,58 @@ func (s *DevMemServer) handleTrackFiles(ctx context.Context, req mcplib.CallTool
 	}
 	return respond("tracked %d files (%s) in %s", tracked, action, feature.Name)
 }
+
+func (s *DevMemServer) handleAutoRemember(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+	text, errRes := requireParam(req, "text")
+	if errRes != nil {
+		return errRes, nil
+	}
+	feature, errRes := s.requireActiveFeature()
+	if errRes != nil {
+		return errRes, nil
+	}
+
+	items := memory.ExtractFromText(text)
+	if len(items) == 0 {
+		return respond("No extractable information found in the provided text.")
+	}
+
+	counts := map[string]int{}
+	totalLinks := 0
+
+	for _, item := range items {
+		switch item.Type {
+		case "fact":
+			if item.Fact != nil {
+				fact, err := s.store.CreateFact(feature.ID, s.currentSessionID, item.Fact.Subject, item.Fact.Predicate, item.Fact.Object)
+				if err != nil {
+					continue
+				}
+				lc, _ := s.store.AutoLink(fact.ID, "fact", item.Content)
+				totalLinks += lc
+				counts["fact"]++
+			}
+		default:
+			noteType := item.Type
+			if noteType == "next_step" {
+				noteType = "note"
+			}
+			note, err := s.store.CreateNote(feature.ID, s.currentSessionID, item.Content, noteType)
+			if err != nil {
+				continue
+			}
+			lc, _ := s.store.AutoLink(note.ID, "note", item.Content)
+			totalLinks += lc
+			counts[item.Type]++
+		}
+	}
+
+	var parts []string
+	for _, k := range []string{"decision", "blocker", "progress", "fact", "next_step"} {
+		if c := counts[k]; c > 0 {
+			parts = append(parts, fmt.Sprintf("%d %ss", c, k))
+		}
+	}
+
+	return respond("Extracted: %s (%d links created)", strings.Join(parts, ", "), totalLinks)
+}

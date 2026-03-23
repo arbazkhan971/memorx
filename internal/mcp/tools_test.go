@@ -98,6 +98,7 @@ func TestAllToolsExist(t *testing.T) {
 		{"devmem_export"}, {"devmem_health"}, {"devmem_forget"},
 		{"devmem_analytics"}, {"devmem_generate_rules"},
 		{"devmem_snapshot"}, {"devmem_recover"},
+		{"devmem_auto_remember"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if _, ok := toolMap[tc.name]; !ok {
@@ -1079,5 +1080,92 @@ func TestHandlerErrors_RequiresActiveFeature(t *testing.T) {
 				t.Errorf("expected error about no active feature, got: %s", text)
 			}
 		})
+	}
+}
+
+func TestHandleAutoRemember(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	ctx := context.Background()
+
+	// Start a feature first.
+	_, err := srv.handleStartFeature(ctx, newReq("devmem_start_feature", map[string]interface{}{
+		"name": "auto-remember-test",
+	}))
+	if err != nil {
+		t.Fatalf("handleStartFeature error: %v", err)
+	}
+
+	res, err := srv.handleAutoRemember(ctx, newReq("devmem_auto_remember", map[string]interface{}{
+		"text": "We decided to use PostgreSQL. The backend uses Go. I'm blocked on the auth service. We completed the migration. Next we need to add caching.",
+	}))
+	if err != nil {
+		t.Fatalf("handleAutoRemember error: %v", err)
+	}
+
+	text := resultText(t, res)
+	if !strings.Contains(text, "Extracted:") {
+		t.Errorf("expected 'Extracted:' in result, got:\n%s", text)
+	}
+	if !strings.Contains(text, "decision") {
+		t.Errorf("expected 'decision' in result, got:\n%s", text)
+	}
+	if !strings.Contains(text, "blocker") {
+		t.Errorf("expected 'blocker' in result, got:\n%s", text)
+	}
+}
+
+func TestHandleAutoRemember_NoActiveFeature(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	ctx := context.Background()
+
+	res, err := srv.handleAutoRemember(ctx, newReq("devmem_auto_remember", map[string]interface{}{
+		"text": "We decided to use PostgreSQL.",
+	}))
+	if err != nil {
+		t.Fatalf("handleAutoRemember error: %v", err)
+	}
+
+	text := resultText(t, res)
+	if !strings.Contains(strings.ToLower(text), "no active feature") {
+		t.Errorf("expected 'No active feature' error, got:\n%s", text)
+	}
+}
+
+func TestHandleAutoRemember_EmptyText(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	ctx := context.Background()
+
+	res, err := srv.handleAutoRemember(ctx, newReq("devmem_auto_remember", map[string]interface{}{}))
+	if err != nil {
+		t.Fatalf("handleAutoRemember error: %v", err)
+	}
+
+	text := resultText(t, res)
+	if !strings.Contains(strings.ToLower(text), "required") {
+		t.Errorf("expected 'required' error for missing text param, got:\n%s", text)
+	}
+}
+
+func TestHandleAutoRemember_NoMatches(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	ctx := context.Background()
+
+	_, err := srv.handleStartFeature(ctx, newReq("devmem_start_feature", map[string]interface{}{
+		"name": "auto-remember-empty",
+	}))
+	if err != nil {
+		t.Fatalf("handleStartFeature error: %v", err)
+	}
+
+	res, err := srv.handleAutoRemember(ctx, newReq("devmem_auto_remember", map[string]interface{}{
+		"text": "Hello there.",
+	}))
+	if err != nil {
+		t.Fatalf("handleAutoRemember error: %v", err)
+	}
+
+	text := resultText(t, res)
+	if !strings.Contains(text, "No extractable information") {
+		t.Errorf("expected 'No extractable information' message, got:\n%s", text)
 	}
 }
