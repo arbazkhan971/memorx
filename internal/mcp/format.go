@@ -51,6 +51,9 @@ func formatContext(ctx *memory.Context) string {
 	ctxSec(&b, "Facts", ctx.ActiveFacts, func(f memory.Fact) string {
 		return fmt.Sprintf("%s %s %s", f.Subject, f.Predicate, f.Object)
 	})
+	ctxSec(&b, "Pinned", ctx.PinnedMemories, func(m memory.MemoryItem) string {
+		return fmt.Sprintf("[%s] %s", m.Type, truncate(m.Content, 100))
+	})
 	ctxSec(&b, "Sessions", ctx.SessionHistory, func(s memory.Session) string {
 		e := s.EndedAt
 		if e == "" {

@@ -13,6 +13,7 @@ type Context struct {
 	RecentCommits                  []CommitInfo
 	RecentNotes                    []Note
 	ActiveFacts                    []Fact
+	PinnedMemories                 []MemoryItem
 	Links                          []MemoryLink
 	SessionHistory                 []Session
 	FilesTouched                   []string
@@ -66,6 +67,9 @@ func (s *Store) GetContext(featureID, tier string, asOf *time.Time) (*Context, e
 			ctx.ActiveFacts, _ = s.GetActiveFacts(featureID)
 		}
 	}
+	// Always include pinned memories regardless of tier.
+	ctx.PinnedMemories, _ = s.GetPinnedMemories(featureID)
+
 	if tc.sessions > 0 {
 		ctx.SessionHistory, _ = s.ListSessions(featureID, tc.sessions)
 	}

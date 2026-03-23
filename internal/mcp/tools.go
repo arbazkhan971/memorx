@@ -724,6 +724,114 @@ func (s *DevMemServer) handleForget(_ context.Context, req mcplib.CallToolReques
 	}
 }
 
+func (s *DevMemServer) handleManage(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+	action, errRes := requireParam(req, "action")
+	if errRes != nil {
+		return errRes, nil
+	}
+
+	switch action {
+	case "list":
+		feature, errRes := s.requireActiveFeature()
+		if errRes != nil {
+			return errRes, nil
+		}
+		filterStr := getStringArg(req, "filter", "all")
+		limit := getIntArg(req, "limit", 20)
+		filter := memory.MemoryFilter{Limit: limit}
+		switch filterStr {
+		case "notes":
+			filter.Type = "notes"
+		case "facts":
+			filter.Type = "facts"
+		case "pinned":
+			pinned := true
+			filter.Pinned = &pinned
+		}
+		items, err := s.store.ListMemories(feature.ID, filter)
+		if err != nil {
+			return respondErr("Failed to list memories: %v", err)
+		}
+		if len(items) == 0 {
+			return respond("No memories found (filter: %s).", filterStr)
+		}
+		var b strings.Builder
+		fmt.Fprintf(&b, "# Memories (%d, filter: %s)\n\n", len(items), filterStr)
+		for _, m := range items {
+			pin := ""
+			if m.Pinned {
+				pin = " [PINNED]"
+			}
+			fmt.Fprintf(&b, "- **[%s]** `%s` %s%s\n  %s\n", m.Type, m.ID[:8], m.CreatedAt, pin, truncate(m.Content, 120))
+		}
+		return mcplib.NewToolResultText(b.String()), nil
+
+	case "pin":
+		id, errRes := requireParam(req, "id")
+		if errRes != nil {
+			return errRes, nil
+		}
+		memType := s.detectMemoryType(id)
+		if memType == "" {
+			return respondErr("Memory with ID %q not found in notes or facts.", id)
+		}
+		if err := s.store.PinMemory(id, memType); err != nil {
+			return respondErr("Failed to pin: %v", err)
+		}
+		return respond("Pinned %s `%s`. It will now always appear in context.", memType, id[:min(8, len(id))])
+
+	case "unpin":
+		id, errRes := requireParam(req, "id")
+		if errRes != nil {
+			return errRes, nil
+		}
+		memType := s.detectMemoryType(id)
+		if memType == "" {
+			return respondErr("Memory with ID %q not found in notes or facts.", id)
+		}
+		if err := s.store.UnpinMemory(id, memType); err != nil {
+			return respondErr("Failed to unpin: %v", err)
+		}
+		return respond("Unpinned %s `%s`.", memType, id[:min(8, len(id))])
+
+	case "delete":
+		id, errRes := requireParam(req, "id")
+		if errRes != nil {
+			return errRes, nil
+		}
+		typ, err := s.store.ForgetByID(id)
+		if err != nil {
+			return respondErr("Failed to delete: %v", err)
+		}
+		return respond("Deleted %s `%s`.", typ, id[:min(8, len(id))])
+
+	default:
+		return respondErr("Unknown action %q. Use: list, pin, unpin, or delete.", action)
+	}
+}
+
+// detectMemoryType checks if an ID belongs to a note or fact.
+func (s *DevMemServer) detectMemoryType(id string) string {
+	r := s.db.Reader()
+	var dummy string
+	if r.QueryRow(`SELECT id FROM notes WHERE id = ?`, id).Scan(&dummy) == nil {
+		return "note"
+	}
+	if r.QueryRow(`SELECT id FROM facts WHERE id = ?`, id).Scan(&dummy) == nil {
+		return "fact"
+	}
+	return ""
+}
+
+func getIntArg(req mcplib.CallToolRequest, name string, fb int) int {
+	if a := req.GetArguments(); a != nil {
+		if v, ok := a[name].(float64); ok {
+			return int(v)
+		}
+	}
+	return fb
+}
+
 func (s *DevMemServer) handleGenerateRules(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	output, dryRun := getStringArg(req, "output", ""), getBoolArg(req, "dry_run", false)
 	content, err := s.store.GenerateAgentsMD()
