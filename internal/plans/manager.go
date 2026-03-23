@@ -10,44 +10,27 @@ import (
 	"github.com/google/uuid"
 )
 
-// StepInput represents a step to be created with a new plan.
-type StepInput struct {
-	Title       string
-	Description string
-}
+type StepInput struct{ Title, Description string }
 
-// Plan represents a development plan for a feature.
 type Plan struct {
-	ID         string
-	FeatureID  string
-	SessionID  string
-	Title      string
-	Content    string
-	Status     string
-	SourceTool string
-	ValidAt    string
-	InvalidAt  string
-	CreatedAt  string
-	UpdatedAt  string
+	ID, FeatureID, SessionID       string
+	Title, Content, Status         string
+	SourceTool                     string
+	ValidAt, InvalidAt             string
+	CreatedAt, UpdatedAt           string
 }
 
-// PlanStep represents a single step within a plan.
 type PlanStep struct {
-	ID            string
-	PlanID        string
-	Title         string
-	Description   string
-	Status        string
-	CompletedAt   string
-	LinkedCommits string
-	StepNumber    int
+	ID, PlanID, Title, Description string
+	Status, CompletedAt            string
+	LinkedCommits                  string
+	StepNumber                     int
 }
 
 const planCols = `id, feature_id, COALESCE(session_id,''), title, content, status, COALESCE(source_tool,'unknown'), COALESCE(valid_at,''), COALESCE(invalid_at,''), created_at, updated_at`
 
 const stepCols = `id, plan_id, title, COALESCE(description, ''), status, COALESCE(completed_at, ''), COALESCE(linked_commits, '[]'), step_number`
 
-// scanner is satisfied by *sql.Row and *sql.Rows.
 type scanner interface {
 	Scan(dest ...any) error
 }
@@ -65,19 +48,10 @@ func scanStep(s scanner) (PlanStep, error) {
 	return st, err
 }
 
-// Manager provides plan CRUD operations with bi-temporal versioning.
-type Manager struct {
-	db *storage.DB
-}
+type Manager struct{ db *storage.DB }
 
-// NewManager creates a new Manager backed by the given DB.
-func NewManager(db *storage.DB) *Manager {
-	return &Manager{db: db}
-}
+func NewManager(db *storage.DB) *Manager { return &Manager{db: db} }
 
-// CreatePlan creates a new plan with steps. If an active plan exists for the
-// feature, it is superseded (invalid_at set to now, status set to superseded).
-// Completed steps from the old plan are copied to the new plan.
 func (m *Manager) CreatePlan(featureID, sessionID, title, content, sourceTool string, steps []StepInput) (*Plan, error) {
 	now := time.Now().UTC().Format(time.DateTime)
 	planID := uuid.New().String()
@@ -88,7 +62,6 @@ func (m *Manager) CreatePlan(featureID, sessionID, title, content, sourceTool st
 	}
 	defer tx.Rollback()
 
-	// Check for existing active plan and supersede it
 	var oldPlanID string
 	err = tx.QueryRow(
 		`SELECT id FROM plans WHERE feature_id = ? AND invalid_at IS NULL AND status = 'active'`,
@@ -100,7 +73,6 @@ func (m *Manager) CreatePlan(featureID, sessionID, title, content, sourceTool st
 
 	var completedSteps []PlanStep
 	if oldPlanID != "" {
-		// Supersede old plan
 		if _, err = tx.Exec(
 			`UPDATE plans SET invalid_at = ?, status = 'superseded', updated_at = ? WHERE id = ?`,
 			now, now, oldPlanID,
@@ -108,28 +80,12 @@ func (m *Manager) CreatePlan(featureID, sessionID, title, content, sourceTool st
 			return nil, fmt.Errorf("supersede old plan: %w", err)
 		}
 
-		// Gather completed steps from old plan
-		rows, err := tx.Query(
-			`SELECT `+stepCols+` FROM plan_steps WHERE plan_id = ? AND status = 'completed' ORDER BY step_number`,
-			oldPlanID,
-		)
+		completedSteps, err = scanSteps(tx.Query(
+			`SELECT `+stepCols+` FROM plan_steps WHERE plan_id = ? AND status = 'completed' ORDER BY step_number`, oldPlanID))
 		if err != nil {
 			return nil, fmt.Errorf("query old completed steps: %w", err)
 		}
-		defer rows.Close()
-		for rows.Next() {
-			cs, err := scanStep(rows)
-			if err != nil {
-				return nil, fmt.Errorf("scan old step: %w", err)
-			}
-			completedSteps = append(completedSteps, cs)
-		}
-		if err := rows.Err(); err != nil {
-			return nil, fmt.Errorf("iterate old steps: %w", err)
-		}
 	}
-
-	// Insert new plan
 	if _, err = tx.Exec(
 		`INSERT INTO plans (id, feature_id, session_id, title, content, status, source_tool, valid_at, created_at, updated_at)
 		 VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)`,
@@ -137,8 +93,6 @@ func (m *Manager) CreatePlan(featureID, sessionID, title, content, sourceTool st
 	); err != nil {
 		return nil, fmt.Errorf("insert plan: %w", err)
 	}
-
-	// Sync to plans_fts
 	var rowid int64
 	if err = tx.QueryRow(`SELECT rowid FROM plans WHERE id = ?`, planID).Scan(&rowid); err != nil {
 		return nil, fmt.Errorf("get plan rowid: %w", err)
@@ -149,8 +103,6 @@ func (m *Manager) CreatePlan(featureID, sessionID, title, content, sourceTool st
 	); err != nil {
 		return nil, fmt.Errorf("sync plans_fts: %w", err)
 	}
-
-	// Copy completed steps from old plan, then insert new steps
 	stepNum := 1
 	for _, cs := range completedSteps {
 		if _, err = tx.Exec(
@@ -172,26 +124,16 @@ func (m *Manager) CreatePlan(featureID, sessionID, title, content, sourceTool st
 		}
 		stepNum++
 	}
-
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit transaction: %w", err)
 	}
-
 	return &Plan{
-		ID:         planID,
-		FeatureID:  featureID,
-		SessionID:  sessionID,
-		Title:      title,
-		Content:    content,
-		Status:     "active",
-		SourceTool: sourceTool,
-		ValidAt:    now,
-		CreatedAt:  now,
-		UpdatedAt:  now,
+		ID: planID, FeatureID: featureID, SessionID: sessionID,
+		Title: title, Content: content, Status: "active",
+		SourceTool: sourceTool, ValidAt: now, CreatedAt: now, UpdatedAt: now,
 	}, nil
 }
 
-// GetActivePlan returns the current active plan for a feature.
 func (m *Manager) GetActivePlan(featureID string) (*Plan, error) {
 	p, err := scanPlan(m.db.Reader().QueryRow(
 		`SELECT `+planCols+` FROM plans WHERE feature_id = ? AND invalid_at IS NULL AND status = 'active'`, featureID))
@@ -204,37 +146,33 @@ func (m *Manager) GetActivePlan(featureID string) (*Plan, error) {
 	return &p, nil
 }
 
-// ListPlans returns all plans for a feature, including superseded ones.
 func (m *Manager) ListPlans(featureID string) ([]Plan, error) {
-	rows, err := m.db.Reader().Query(
-		`SELECT `+planCols+` FROM plans WHERE feature_id = ? ORDER BY created_at DESC`,
-		featureID,
-	)
+	return scanPlans(m.db.Reader().Query(
+		`SELECT `+planCols+` FROM plans WHERE feature_id = ? ORDER BY created_at DESC`, featureID))
+}
+
+func scanPlans(rows *sql.Rows, err error) ([]Plan, error) {
 	if err != nil {
-		return nil, fmt.Errorf("list plans: %w", err)
+		return nil, err
 	}
 	defer rows.Close()
-
-	var plans []Plan
+	var out []Plan
 	for rows.Next() {
 		p, err := scanPlan(rows)
 		if err != nil {
-			return nil, fmt.Errorf("scan plan: %w", err)
+			return nil, err
 		}
-		plans = append(plans, p)
+		out = append(out, p)
 	}
-	return plans, rows.Err()
+	return out, rows.Err()
 }
 
-// UpdateStepStatus updates a step's status and sets completed_at if completed.
 func (m *Manager) UpdateStepStatus(stepID, status string) error {
 	now := time.Now().UTC().Format(time.DateTime)
-
 	var completedAt *string
 	if status == "completed" {
 		completedAt = &now
 	}
-
 	result, err := m.db.Writer().Exec(
 		`UPDATE plan_steps SET status = ?, completed_at = ? WHERE id = ?`,
 		status, completedAt, stepID,
@@ -249,29 +187,27 @@ func (m *Manager) UpdateStepStatus(stepID, status string) error {
 	return nil
 }
 
-// GetPlanSteps returns all steps for a plan, ordered by step number.
 func (m *Manager) GetPlanSteps(planID string) ([]PlanStep, error) {
-	rows, err := m.db.Reader().Query(
-		`SELECT `+stepCols+` FROM plan_steps WHERE plan_id = ? ORDER BY step_number`,
-		planID,
-	)
+	return scanSteps(m.db.Reader().Query(
+		`SELECT `+stepCols+` FROM plan_steps WHERE plan_id = ? ORDER BY step_number`, planID))
+}
+
+func scanSteps(rows *sql.Rows, err error) ([]PlanStep, error) {
 	if err != nil {
-		return nil, fmt.Errorf("get plan steps: %w", err)
+		return nil, err
 	}
 	defer rows.Close()
-
-	var steps []PlanStep
+	var out []PlanStep
 	for rows.Next() {
 		s, err := scanStep(rows)
 		if err != nil {
-			return nil, fmt.Errorf("scan step: %w", err)
+			return nil, err
 		}
-		steps = append(steps, s)
+		out = append(out, s)
 	}
-	return steps, rows.Err()
+	return out, rows.Err()
 }
 
-// LinkCommitToStep appends a commit hash to the step's linked_commits JSON array.
 func (m *Manager) LinkCommitToStep(stepID, commitHash string) error {
 	var raw string
 	switch err := m.db.Reader().QueryRow(
@@ -287,9 +223,7 @@ func (m *Manager) LinkCommitToStep(stepID, commitHash string) error {
 	if err := json.Unmarshal([]byte(raw), &commits); err != nil {
 		commits = []string{}
 	}
-	commits = append(commits, commitHash)
-
-	updated, err := json.Marshal(commits)
+	updated, err := json.Marshal(append(commits, commitHash))
 	if err != nil {
 		return fmt.Errorf("marshal linked_commits: %w", err)
 	}

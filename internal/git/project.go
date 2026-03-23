@@ -8,14 +8,22 @@ import (
 	"strings"
 )
 
-func FindGitRoot(dir string) (string, error) {
-	cmd := exec.Command("git", "rev-parse", "--show-toplevel")
+func gitOutput(dir string, args ...string) (string, error) {
+	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
 	out, err := cmd.Output()
 	if err != nil {
-		return "", fmt.Errorf("not a git repository: %w", err)
+		return "", err
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+func FindGitRoot(dir string) (string, error) {
+	s, err := gitOutput(dir, "rev-parse", "--show-toplevel")
+	if err != nil {
+		return "", fmt.Errorf("not a git repository: %w", err)
+	}
+	return s, nil
 }
 
 func EnsureMemoryDir(gitRoot string) (string, error) {
@@ -30,18 +38,14 @@ func EnsureMemoryDir(gitRoot string) (string, error) {
 }
 
 func CurrentBranch(gitRoot string) (string, error) {
-	cmd := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
-	cmd.Dir = gitRoot
-	out, err := cmd.Output()
+	s, err := gitOutput(gitRoot, "rev-parse", "--abbrev-ref", "HEAD")
 	if err != nil {
 		return "", fmt.Errorf("get current branch: %w", err)
 	}
-	return strings.TrimSpace(string(out)), nil
+	return s, nil
 }
 
-func ProjectName(gitRoot string) string {
-	return filepath.Base(gitRoot)
-}
+func ProjectName(gitRoot string) string { return filepath.Base(gitRoot) }
 
 func ensureGitignore(gitRoot string) error {
 	path := filepath.Join(gitRoot, ".gitignore")

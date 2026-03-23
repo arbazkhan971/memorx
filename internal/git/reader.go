@@ -8,19 +8,14 @@ import (
 )
 
 type Commit struct {
-	Hash         string
-	Message      string
-	Author       string
-	CommittedAt  string
-	FilesChanged []FileChange
+	Hash, Message, Author, CommittedAt string
+	FilesChanged                       []FileChange
 }
 
 type FileChange struct {
-	Path   string
-	Action string // "added", "modified", "deleted"
+	Path, Action string
 }
 
-// ReadCommits returns commits since the given time in reverse chronological order.
 func ReadCommits(gitRoot string, since time.Time) ([]Commit, error) {
 	cmd := exec.Command("git", "log",
 		"--since="+since.Format(time.RFC3339),
@@ -35,12 +30,10 @@ func ReadCommits(gitRoot string, since time.Time) ([]Commit, error) {
 		}
 		return nil, fmt.Errorf("git log: %w", err)
 	}
-
 	trimmed := strings.TrimSpace(string(out))
 	if trimmed == "" {
 		return nil, nil
 	}
-
 	var commits []Commit
 	for _, line := range strings.Split(trimmed, "\n") {
 		c, ok := parseCommitLine(line)
@@ -56,33 +49,20 @@ func ReadCommits(gitRoot string, since time.Time) ([]Commit, error) {
 }
 
 func parseCommitLine(line string) (Commit, bool) {
-	line = strings.TrimSpace(line)
-	hash, rest, ok := strings.Cut(line, "||")
-	if !ok {
+	parts := strings.SplitN(strings.TrimSpace(line), "||", 4)
+	if len(parts) != 4 {
 		return Commit{}, false
 	}
-	msg, rest, ok := strings.Cut(rest, "||")
-	if !ok {
-		return Commit{}, false
-	}
-	author, date, ok := strings.Cut(rest, "||")
-	if !ok {
-		return Commit{}, false
-	}
-	return Commit{Hash: hash, Message: msg, Author: author, CommittedAt: date}, true
+	return Commit{Hash: parts[0], Message: parts[1], Author: parts[2], CommittedAt: parts[3]}, true
 }
 
-// readFilesChanged returns the files changed in a commit.
 func readFilesChanged(gitRoot, hash string) ([]FileChange, error) {
-	cmd := exec.Command("git", "diff-tree", "--root", "--no-commit-id", "--name-status", "-r", hash)
-	cmd.Dir = gitRoot
-	out, err := cmd.Output()
+	raw, err := gitOutput(gitRoot, "diff-tree", "--root", "--no-commit-id", "--name-status", "-r", hash)
 	if err != nil {
 		return nil, fmt.Errorf("git diff-tree: %w", err)
 	}
-
 	var files []FileChange
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+	for _, line := range strings.Split(raw, "\n") {
 		if parts := strings.Fields(line); len(parts) >= 2 {
 			path := parts[1]
 			if strings.HasPrefix(parts[0], "R") && len(parts) >= 3 {
@@ -94,15 +74,14 @@ func readFilesChanged(gitRoot, hash string) ([]FileChange, error) {
 	return files, nil
 }
 
+var actionMap = map[string]string{"A": "added", "D": "deleted"}
+
 func parseAction(status string) string {
-	switch {
-	case status == "A":
-		return "added"
-	case status == "D":
-		return "deleted"
-	case strings.HasPrefix(status, "C"):
-		return "added"
-	default:
-		return "modified"
+	if a, ok := actionMap[status]; ok {
+		return a
 	}
+	if strings.HasPrefix(status, "C") {
+		return "added"
+	}
+	return "modified"
 }

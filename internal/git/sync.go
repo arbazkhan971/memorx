@@ -10,21 +10,17 @@ import (
 	"github.com/google/uuid"
 )
 
-// SyncResult contains the results of a commit sync operation.
 type SyncResult struct {
 	NewCommits int
 	Commits    []StoredCommit
 }
 
-// StoredCommit represents a commit that has been stored in the database.
 type StoredCommit struct {
 	ID, Hash, Message, Author, IntentType, CommittedAt string
 	IntentConfidence                                   float64
 	FilesChanged                                       []FileChange
 }
 
-// SyncCommits reads new commits from the git repository and stores them in the database.
-// It skips commits that have already been synced (by hash).
 func SyncCommits(db *storage.DB, gitRoot, featureID, sessionID string, since time.Time) (*SyncResult, error) {
 	commits, err := ReadCommits(gitRoot, since)
 	if err != nil {
