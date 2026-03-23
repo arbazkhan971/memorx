@@ -144,6 +144,13 @@ func (s *DevMemServer) registerTools(srv *server.MCPServer) {
 			),
 			Handler: s.handleExport,
 		},
+		server.ServerTool{
+			Tool: mcplib.NewTool("devmem_analytics",
+				mcplib.WithDescription("Get development analytics and insights: session counts, commit patterns, blocker frequency, feature health. Helps understand where time is spent and what's blocked."),
+				mcplib.WithString("feature", mcplib.Description("Specific feature name (default: project-wide analytics)")),
+			),
+			Handler: s.handleAnalytics,
+		},
 	)
 }
 
