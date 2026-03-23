@@ -22,6 +22,15 @@ type Feature struct {
 	LastActive  string
 }
 
+const featureCols = `id, name, description, status, COALESCE(branch, ''), created_at, last_active`
+
+// scanFeature scans a single row into a Feature.
+func scanFeature(row interface{ Scan(...any) error }) (*Feature, error) {
+	f := &Feature{}
+	err := row.Scan(&f.ID, &f.Name, &f.Description, &f.Status, &f.Branch, &f.CreatedAt, &f.LastActive)
+	return f, err
+}
+
 // Store wraps a storage.DB and provides memory operations.
 type Store struct {
 	db *storage.DB
@@ -49,12 +58,10 @@ func detectBranch() string {
 	return branch
 }
 
-// CreateFeature creates a new feature with a UUID and auto-detected git branch.
-func (s *Store) CreateFeature(name, description string) (*Feature, error) {
+// insertFeature inserts a new feature row and returns the Feature.
+func (s *Store) insertFeature(name, description, now string) (*Feature, error) {
 	id := uuid.New().String()
 	branch := detectBranch()
-	now := time.Now().UTC().Format(time.DateTime)
-
 	_, err := s.db.Writer().Exec(
 		`INSERT INTO features (id, name, description, status, branch, created_at, last_active)
 		 VALUES (?, ?, ?, 'active', ?, ?, ?)`,
@@ -63,25 +70,21 @@ func (s *Store) CreateFeature(name, description string) (*Feature, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create feature: %w", err)
 	}
-
 	return &Feature{
-		ID:          id,
-		Name:        name,
-		Description: description,
-		Status:      "active",
-		Branch:      branch,
-		CreatedAt:   now,
-		LastActive:  now,
+		ID: id, Name: name, Description: description,
+		Status: "active", Branch: branch, CreatedAt: now, LastActive: now,
 	}, nil
+}
+
+// CreateFeature creates a new feature with a UUID and auto-detected git branch.
+func (s *Store) CreateFeature(name, description string) (*Feature, error) {
+	return s.insertFeature(name, description, time.Now().UTC().Format(time.DateTime))
 }
 
 // GetFeature retrieves a feature by name.
 func (s *Store) GetFeature(name string) (*Feature, error) {
-	f := &Feature{}
-	err := s.db.Reader().QueryRow(
-		`SELECT id, name, description, status, COALESCE(branch, ''), created_at, last_active
-		 FROM features WHERE name = ?`, name,
-	).Scan(&f.ID, &f.Name, &f.Description, &f.Status, &f.Branch, &f.CreatedAt, &f.LastActive)
+	f, err := scanFeature(s.db.Reader().QueryRow(
+		`SELECT `+featureCols+` FROM features WHERE name = ?`, name))
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("feature %q not found", name)
 	}
@@ -94,18 +97,15 @@ func (s *Store) GetFeature(name string) (*Feature, error) {
 // ListFeatures returns features filtered by status.
 // statusFilter can be "all", "active", "paused", or "done".
 func (s *Store) ListFeatures(statusFilter string) ([]Feature, error) {
-	var rows *sql.Rows
-	var err error
-
-	if statusFilter == "" || statusFilter == "all" {
-		rows, err = s.db.Reader().Query(
-			`SELECT id, name, description, status, COALESCE(branch, ''), created_at, last_active
-			 FROM features ORDER BY last_active DESC`)
-	} else {
-		rows, err = s.db.Reader().Query(
-			`SELECT id, name, description, status, COALESCE(branch, ''), created_at, last_active
-			 FROM features WHERE status = ? ORDER BY last_active DESC`, statusFilter)
+	query := `SELECT ` + featureCols + ` FROM features`
+	var args []any
+	if statusFilter != "" && statusFilter != "all" {
+		query += ` WHERE status = ?`
+		args = append(args, statusFilter)
 	}
+	query += ` ORDER BY last_active DESC`
+
+	rows, err := s.db.Reader().Query(query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list features: %w", err)
 	}
@@ -113,11 +113,11 @@ func (s *Store) ListFeatures(statusFilter string) ([]Feature, error) {
 
 	var features []Feature
 	for rows.Next() {
-		var f Feature
-		if err := rows.Scan(&f.ID, &f.Name, &f.Description, &f.Status, &f.Branch, &f.CreatedAt, &f.LastActive); err != nil {
+		f, err := scanFeature(rows)
+		if err != nil {
 			return nil, fmt.Errorf("scan feature: %w", err)
 		}
-		features = append(features, f)
+		features = append(features, *f)
 	}
 	return features, rows.Err()
 }
@@ -141,11 +141,8 @@ func (s *Store) UpdateFeatureStatus(name, status string) error {
 
 // GetActiveFeature returns the currently active feature (status='active').
 func (s *Store) GetActiveFeature() (*Feature, error) {
-	f := &Feature{}
-	err := s.db.Reader().QueryRow(
-		`SELECT id, name, description, status, COALESCE(branch, ''), created_at, last_active
-		 FROM features WHERE status = 'active' ORDER BY last_active DESC LIMIT 1`,
-	).Scan(&f.ID, &f.Name, &f.Description, &f.Status, &f.Branch, &f.CreatedAt, &f.LastActive)
+	f, err := scanFeature(s.db.Reader().QueryRow(
+		`SELECT `+featureCols+` FROM features WHERE status = 'active' ORDER BY last_active DESC LIMIT 1`))
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("no active feature")
 	}
@@ -161,62 +158,30 @@ func (s *Store) StartFeature(name, description string) (*Feature, error) {
 	now := time.Now().UTC().Format(time.DateTime)
 
 	// Auto-pause any currently active feature
-	_, err := s.db.Writer().Exec(
+	if _, err := s.db.Writer().Exec(
 		`UPDATE features SET status = 'paused', last_active = ? WHERE status = 'active'`, now,
-	)
-	if err != nil {
+	); err != nil {
 		return nil, fmt.Errorf("pause active features: %w", err)
 	}
 
 	// Check if feature already exists
-	existing := &Feature{}
-	err = s.db.Reader().QueryRow(
-		`SELECT id, name, description, status, COALESCE(branch, ''), created_at, last_active
-		 FROM features WHERE name = ?`, name,
-	).Scan(&existing.ID, &existing.Name, &existing.Description, &existing.Status, &existing.Branch, &existing.CreatedAt, &existing.LastActive)
-
+	existing, err := scanFeature(s.db.Reader().QueryRow(
+		`SELECT `+featureCols+` FROM features WHERE name = ?`, name))
 	if err == sql.ErrNoRows {
-		// Create new feature
-		return s.createFeatureActive(name, description, now)
+		return s.insertFeature(name, description, now)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("check existing feature: %w", err)
 	}
 
 	// Resume existing feature
-	_, err = s.db.Writer().Exec(
+	if _, err = s.db.Writer().Exec(
 		`UPDATE features SET status = 'active', last_active = ? WHERE id = ?`,
 		now, existing.ID,
-	)
-	if err != nil {
+	); err != nil {
 		return nil, fmt.Errorf("resume feature: %w", err)
 	}
 	existing.Status = "active"
 	existing.LastActive = now
 	return existing, nil
-}
-
-// createFeatureActive creates a new feature with active status.
-func (s *Store) createFeatureActive(name, description, now string) (*Feature, error) {
-	id := uuid.New().String()
-	branch := detectBranch()
-
-	_, err := s.db.Writer().Exec(
-		`INSERT INTO features (id, name, description, status, branch, created_at, last_active)
-		 VALUES (?, ?, ?, 'active', ?, ?, ?)`,
-		id, name, description, branch, now, now,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("create feature: %w", err)
-	}
-
-	return &Feature{
-		ID:          id,
-		Name:        name,
-		Description: description,
-		Status:      "active",
-		Branch:      branch,
-		CreatedAt:   now,
-		LastActive:  now,
-	}, nil
 }
