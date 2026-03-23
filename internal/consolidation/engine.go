@@ -16,11 +16,9 @@ import (
 const conflictGroupsSQL = `SELECT COUNT(*) FROM (SELECT subject, predicate FROM facts WHERE invalid_at IS NULL GROUP BY subject, predicate HAVING COUNT(*)>1)`
 
 type ConsolidationState struct {
-	LastRunAt         string
-	EntropyScore      float64
-	UnsummarizedCount int
-	ConflictCount     int
-	NextTriggerAt     string
+	LastRunAt, NextTriggerAt         string
+	EntropyScore                     float64
+	UnsummarizedCount, ConflictCount int
 }
 
 type Config struct {
@@ -32,13 +30,7 @@ type Config struct {
 }
 
 func DefaultConfig() Config {
-	return Config{
-		EntropyThreshold:  0.7,
-		IdleTimeout:       5 * time.Minute,
-		MaxUnsummarized:   20,
-		MaxConflicts:      3,
-		DecayHalfLifeDays: 14.0,
-	}
+	return Config{EntropyThreshold: 0.7, IdleTimeout: 5 * time.Minute, MaxUnsummarized: 20, MaxConflicts: 3, DecayHalfLifeDays: 14.0}
 }
 
 type Engine struct {
@@ -50,9 +42,7 @@ type Engine struct {
 	running bool
 }
 
-func NewEngine(db *storage.DB, cfg Config) *Engine {
-	return &Engine{db: db, cfg: cfg}
-}
+func NewEngine(db *storage.DB, cfg Config) *Engine { return &Engine{db: db, cfg: cfg} }
 
 func (e *Engine) Start() {
 	e.mu.Lock()
@@ -118,10 +108,9 @@ func (e *Engine) RunOnce() error {
 		return fmt.Errorf("count unsummarized: %w", err)
 	}
 	now := time.Now().UTC().Format(time.DateTime)
-	nextTrigger := time.Now().UTC().Add(e.cfg.IdleTimeout).Format(time.DateTime)
 	if _, err = e.db.Writer().Exec(
 		`UPDATE consolidation_state SET last_run_at=?, entropy_score=?, unsummarized_count=?, conflict_count=?, next_trigger_at=? WHERE id=1`,
-		now, entropy, unsummarized, invalidated, nextTrigger,
+		now, entropy, unsummarized, invalidated, time.Now().UTC().Add(e.cfg.IdleTimeout).Format(time.DateTime),
 	); err != nil {
 		return fmt.Errorf("update consolidation state: %w", err)
 	}
@@ -173,8 +162,7 @@ func (e *Engine) queryCount(sql string, args ...any) (int, error) {
 
 func (e *Engine) hoursSinceLastRun() (float64, error) {
 	var lastRunAt sql.NullString
-	err := e.db.Reader().QueryRow(`SELECT last_run_at FROM consolidation_state WHERE id=1`).Scan(&lastRunAt)
-	if err != nil || !lastRunAt.Valid || lastRunAt.String == "" {
+	if err := e.db.Reader().QueryRow(`SELECT last_run_at FROM consolidation_state WHERE id=1`).Scan(&lastRunAt); err != nil || !lastRunAt.Valid || lastRunAt.String == "" {
 		return 24, nil
 	}
 	lastRun, err := time.Parse(time.DateTime, lastRunAt.String)
@@ -209,13 +197,11 @@ func (e *Engine) ApplyDecay() (int, error) {
 
 func (e *Engine) DetectContradictions() (int, error) {
 	rows, err := e.db.Reader().Query(
-		`SELECT subject, predicate FROM facts WHERE invalid_at IS NULL GROUP BY subject, predicate HAVING COUNT(*)>1`,
-	)
+		`SELECT subject, predicate FROM facts WHERE invalid_at IS NULL GROUP BY subject, predicate HAVING COUNT(*)>1`)
 	if err != nil {
 		return 0, fmt.Errorf("query conflicts: %w", err)
 	}
 	defer rows.Close()
-
 	type conflictGroup struct{ subject, predicate string }
 	var groups []conflictGroup
 	for rows.Next() {
@@ -228,14 +214,11 @@ func (e *Engine) DetectContradictions() (int, error) {
 	if err := rows.Err(); err != nil {
 		return 0, fmt.Errorf("iterate conflict groups: %w", err)
 	}
-
 	totalInvalidated := 0
 	now := time.Now().UTC().Format(time.DateTime)
 	for _, g := range groups {
 		factRows, err := e.db.Reader().Query(
-			`SELECT id FROM facts WHERE subject=? AND predicate=? AND invalid_at IS NULL ORDER BY valid_at DESC`,
-			g.subject, g.predicate,
-		)
+			`SELECT id FROM facts WHERE subject=? AND predicate=? AND invalid_at IS NULL ORDER BY valid_at DESC`, g.subject, g.predicate)
 		if err != nil {
 			return totalInvalidated, fmt.Errorf("query facts for conflict: %w", err)
 		}
@@ -266,13 +249,11 @@ func (e *Engine) DetectContradictions() (int, error) {
 
 func (e *Engine) DiscoverLinks() (int, error) {
 	rows, err := e.db.Reader().Query(
-		`SELECT n.id, n.content FROM notes n LEFT JOIN memory_links ml ON ml.source_id=n.id AND ml.source_type='note' WHERE ml.id IS NULL`,
-	)
+		`SELECT n.id, n.content FROM notes n LEFT JOIN memory_links ml ON ml.source_id=n.id AND ml.source_type='note' WHERE ml.id IS NULL`)
 	if err != nil {
 		return 0, fmt.Errorf("query unlinked notes: %w", err)
 	}
 	defer rows.Close()
-
 	type unlinkedNote struct{ id, content string }
 	var notes []unlinkedNote
 	for rows.Next() {
@@ -285,7 +266,6 @@ func (e *Engine) DiscoverLinks() (int, error) {
 	if err := rows.Err(); err != nil {
 		return 0, fmt.Errorf("iterate unlinked notes: %w", err)
 	}
-
 	totalLinks := 0
 	for _, note := range notes {
 		query := buildFTSQuery(note.content)
@@ -293,8 +273,7 @@ func (e *Engine) DiscoverLinks() (int, error) {
 			continue
 		}
 		matchRows, err := e.db.Reader().Query(
-			`SELECT n.id, rank FROM notes_fts fts JOIN notes n ON n.rowid=fts.rowid WHERE notes_fts MATCH ? ORDER BY rank LIMIT 10`, query,
-		)
+			`SELECT n.id, rank FROM notes_fts fts JOIN notes n ON n.rowid=fts.rowid WHERE notes_fts MATCH ? ORDER BY rank LIMIT 10`, query)
 		if err != nil {
 			continue
 		}
@@ -326,9 +305,7 @@ func buildFTSQuery(content string) string {
 	if len(content) > 100 {
 		content = content[:100]
 	}
-	words := strings.FieldsFunc(content, func(r rune) bool {
-		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
-	})
+	words := strings.FieldsFunc(content, func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) })
 	var terms []string
 	seen := make(map[string]bool)
 	for _, w := range words {
@@ -351,7 +328,6 @@ func buildFTSQuery(content string) string {
 func (e *Engine) createLink(sourceID, sourceType, targetID, targetType, relationship string, strength float64) error {
 	_, err := e.db.Writer().Exec(
 		`INSERT OR IGNORE INTO memory_links (id, source_id, source_type, target_id, target_type, relationship, strength, created_at) VALUES (?,?,?,?,?,?,?,?)`,
-		uuid.New().String(), sourceID, sourceType, targetID, targetType, relationship, strength, time.Now().UTC().Format(time.DateTime),
-	)
+		uuid.New().String(), sourceID, sourceType, targetID, targetType, relationship, strength, time.Now().UTC().Format(time.DateTime))
 	return err
 }
