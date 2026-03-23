@@ -9,10 +9,10 @@ import (
 )
 
 type Fact struct {
-	ID, FeatureID, SessionID    string
-	Subject, Predicate, Object  string
-	ValidAt, InvalidAt, RecordedAt string
-	Confidence                  float64
+	ID, FeatureID, SessionID           string
+	Subject, Predicate, Object         string
+	ValidAt, InvalidAt, RecordedAt     string
+	Confidence                         float64
 }
 
 const factColumns = `id, feature_id, COALESCE(session_id, ''), subject, predicate, object,
@@ -26,29 +26,14 @@ func scanFact(row interface{ Scan(dest ...any) error }) (Fact, error) {
 	return f, err
 }
 
-func collectFacts(rows *sql.Rows) ([]Fact, error) {
-	defer rows.Close()
-	var out []Fact
-	for rows.Next() {
-		f, err := scanFact(rows)
-		if err != nil {
-			return nil, fmt.Errorf("scan fact: %w", err)
-		}
-		out = append(out, f)
-	}
-	return out, rows.Err()
-}
-
 func (s *Store) CreateFact(featureID, sessionID, subject, predicate, object string) (*Fact, error) {
 	now := time.Now().UTC().Format(time.DateTime)
 	w := s.db.Writer()
-
 	var existingID, existingObject string
 	err := w.QueryRow(
 		`SELECT id, object FROM facts WHERE feature_id = ? AND subject = ? AND predicate = ? AND invalid_at IS NULL`,
 		featureID, subject, predicate,
 	).Scan(&existingID, &existingObject)
-
 	if err == nil {
 		if existingObject == object {
 			f, err := scanFact(s.db.Reader().QueryRow(`SELECT `+factColumns+` FROM facts WHERE id = ?`, existingID))
@@ -61,7 +46,6 @@ func (s *Store) CreateFact(featureID, sessionID, subject, predicate, object stri
 			return nil, fmt.Errorf("invalidate old fact: %w", err)
 		}
 	}
-
 	id := uuid.New().String()
 	if _, err = w.Exec(
 		`INSERT INTO facts (id, feature_id, session_id, subject, predicate, object, valid_at, recorded_at, confidence) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1.0)`,
@@ -69,7 +53,6 @@ func (s *Store) CreateFact(featureID, sessionID, subject, predicate, object stri
 	); err != nil {
 		return nil, fmt.Errorf("create fact: %w", err)
 	}
-
 	var rowID int64
 	if err = w.QueryRow(`SELECT rowid FROM facts WHERE id = ?`, id).Scan(&rowID); err != nil {
 		return nil, fmt.Errorf("get fact rowid: %w", err)
@@ -77,7 +60,6 @@ func (s *Store) CreateFact(featureID, sessionID, subject, predicate, object stri
 	if _, err = w.Exec(`INSERT INTO facts_fts(rowid, subject, predicate, object) VALUES (?, ?, ?, ?)`, rowID, subject, predicate, object); err != nil {
 		return nil, fmt.Errorf("sync fact to fts: %w", err)
 	}
-
 	return &Fact{
 		ID: id, FeatureID: featureID, SessionID: sessionID,
 		Subject: subject, Predicate: predicate, Object: object,
@@ -104,11 +86,7 @@ func (s *Store) queryFacts(featureID string, asOf *time.Time) ([]Fact, error) {
 		q = `SELECT ` + factColumns + ` FROM facts WHERE feature_id = ? AND invalid_at IS NULL ORDER BY valid_at DESC`
 		args = []any{featureID}
 	}
-	rows, err := s.db.Reader().Query(q, args...)
-	if err != nil {
-		return nil, fmt.Errorf("query facts: %w", err)
-	}
-	return collectFacts(rows)
+	return collectRows(s.db.Reader(), q, args, func(rows *sql.Rows) (Fact, error) { return scanFact(rows) })
 }
 
 func (s *Store) InvalidateFact(factID string) error {

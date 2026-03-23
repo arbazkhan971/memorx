@@ -25,17 +25,10 @@ type FeatureAnalytics struct {
 }
 
 type ProjectAnalytics struct {
-	TotalFeatures      int
-	ActiveFeatures     int
-	PausedFeatures     int
-	DoneFeatures       int
-	TotalSessions      int
-	TotalCommits       int
-	TotalNotes         int
-	TotalFacts         int
-	MostActiveFeature  string
-	MostBlockedFeature string
-	RecentActivity     []string
+	TotalFeatures, ActiveFeatures, PausedFeatures, DoneFeatures int
+	TotalSessions, TotalCommits, TotalNotes, TotalFacts         int
+	MostActiveFeature, MostBlockedFeature                       string
+	RecentActivity                                              []string
 }
 
 func (s *Store) GetFeatureAnalytics(featureID string) (*FeatureAnalytics, error) {
@@ -44,7 +37,6 @@ func (s *Store) GetFeatureAnalytics(featureID string) (*FeatureAnalytics, error)
 	if err != nil {
 		return nil, fmt.Errorf("feature not found: %w", err)
 	}
-
 	a := &FeatureAnalytics{Name: f.Name, IntentBreakdown: make(map[string]int)}
 	a.SessionCount = countRows(r, `SELECT COUNT(*) FROM sessions WHERE feature_id = ?`, featureID)
 	a.CommitCount = countRows(r, `SELECT COUNT(*) FROM commits WHERE feature_id = ?`, featureID)
@@ -55,9 +47,7 @@ func (s *Store) GetFeatureAnalytics(featureID string) (*FeatureAnalytics, error)
 	a.ActiveFactCount = countRows(r, `SELECT COUNT(*) FROM facts WHERE feature_id = ? AND invalid_at IS NULL`, featureID)
 	a.InvalidatedFactCount = a.FactCount - a.ActiveFactCount
 	a.PlanProgress = s.loadPlanProgress(r, featureID)
-
-	rows, err := r.Query(`SELECT COALESCE(intent_type, 'unknown'), COUNT(*) FROM commits WHERE feature_id = ? GROUP BY intent_type`, featureID)
-	if err == nil {
+	if rows, err := r.Query(`SELECT COALESCE(intent_type, 'unknown'), COUNT(*) FROM commits WHERE feature_id = ? GROUP BY intent_type`, featureID); err == nil {
 		defer rows.Close()
 		for rows.Next() {
 			var k string
@@ -67,7 +57,6 @@ func (s *Store) GetFeatureAnalytics(featureID string) (*FeatureAnalytics, error)
 			}
 		}
 	}
-
 	now := time.Now().UTC()
 	if t, err := time.Parse(time.DateTime, f.CreatedAt); err == nil {
 		a.DaysSinceCreated = int(math.Floor(now.Sub(t).Hours() / 24))
@@ -91,7 +80,6 @@ func (s *Store) GetProjectAnalytics() (*ProjectAnalytics, error) {
 		TotalNotes:     countRows(r, `SELECT COUNT(*) FROM notes`),
 		TotalFacts:     countRows(r, `SELECT COUNT(*) FROM facts`),
 	}
-
 	if id := scanNullString(r, `SELECT feature_id FROM sessions GROUP BY feature_id ORDER BY COUNT(*) DESC LIMIT 1`); id != "" {
 		r.QueryRow(`SELECT name FROM features WHERE id = ?`, id).Scan(&a.MostActiveFeature)
 	}
@@ -155,22 +143,18 @@ func formatDuration(d time.Duration) string {
 	if d < time.Minute {
 		return fmt.Sprintf("%ds", int(d.Seconds()))
 	}
-	h, m := int(d.Hours()), int(d.Minutes())%60
-	if h > 0 {
+	if h, m := int(d.Hours()), int(d.Minutes())%60; h > 0 {
 		return fmt.Sprintf("%dh%dm", h, m)
 	}
-	return fmt.Sprintf("%dm", m)
+	return fmt.Sprintf("%dm", int(d.Minutes()))
 }
 
 func (s *Store) loadRecentActivity(r *sql.DB) []string {
-	rows, err := r.Query(`
-		SELECT event_type, content, feature_name, created_at FROM (
-			SELECT 'note' AS event_type, n.content, f.name AS feature_name, n.created_at
-			FROM notes n JOIN features f ON n.feature_id = f.id
-			UNION ALL
-			SELECT 'commit', c.message, f.name, c.committed_at
-			FROM commits c JOIN features f ON c.feature_id = f.id
-		) events ORDER BY created_at DESC LIMIT 5`)
+	rows, err := r.Query(`SELECT event_type, content, feature_name, created_at FROM (
+		SELECT 'note' AS event_type, n.content, f.name AS feature_name, n.created_at FROM notes n JOIN features f ON n.feature_id = f.id
+		UNION ALL
+		SELECT 'commit', c.message, f.name, c.committed_at FROM commits c JOIN features f ON c.feature_id = f.id
+	) events ORDER BY created_at DESC LIMIT 5`)
 	if err != nil {
 		return nil
 	}

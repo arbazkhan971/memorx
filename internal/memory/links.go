@@ -52,55 +52,38 @@ func (s *Store) GetLinks(memoryID, memoryType string) ([]MemoryLink, error) {
 	return out, rows.Err()
 }
 
-type ftsTarget struct {
-	typeName, table string
-}
-
-var autoLinkTargets = []ftsTarget{{"note", "notes"}, {"fact", "facts"}, {"commit", "commits"}}
-
 func (s *Store) AutoLink(sourceID, sourceType, content string) (int, error) {
 	count := 0
-	for _, t := range autoLinkTargets {
+	for _, t := range [3][2]string{{"note", "notes"}, {"fact", "facts"}, {"commit", "commits"}} {
 		q := fmt.Sprintf(
 			`SELECT t.id, '%s' as type, rank FROM %s_fts fts JOIN %s t ON t.rowid = fts.rowid
 			 WHERE %s_fts MATCH ? AND rank < -0.5 ORDER BY rank LIMIT 10`,
-			t.typeName, t.table, t.table, t.table,
+			t[0], t[1], t[1], t[1],
 		)
-		n, err := s.searchAndLink(sourceID, sourceType, content, q)
+		rows, err := s.db.Reader().Query(q, content)
 		if err != nil {
-			return count, fmt.Errorf("autolink %s: %w", t.table, err)
+			continue
 		}
-		count += n
+		for rows.Next() {
+			var targetID, targetType string
+			var rank float64
+			if rows.Scan(&targetID, &targetType, &rank) != nil {
+				continue
+			}
+			if targetID == sourceID && targetType == sourceType {
+				continue
+			}
+			strength := 0.5
+			if rank < -2.0 {
+				strength = 0.9
+			} else if rank < -1.0 {
+				strength = 0.7
+			}
+			if s.CreateLink(sourceID, sourceType, targetID, targetType, "related", strength) == nil {
+				count++
+			}
+		}
+		rows.Close()
 	}
 	return count, nil
-}
-
-func (s *Store) searchAndLink(sourceID, sourceType, content, query string) (int, error) {
-	rows, err := s.db.Reader().Query(query, content)
-	if err != nil {
-		return 0, nil
-	}
-	defer rows.Close()
-	count := 0
-	for rows.Next() {
-		var targetID, targetType string
-		var rank float64
-		if rows.Scan(&targetID, &targetType, &rank) != nil {
-			continue
-		}
-		if targetID == sourceID && targetType == sourceType {
-			continue
-		}
-		strength := 0.5
-		if rank < -2.0 {
-			strength = 0.9
-		} else if rank < -1.0 {
-			strength = 0.7
-		}
-		if s.CreateLink(sourceID, sourceType, targetID, targetType, "related", strength) != nil {
-			continue
-		}
-		count++
-	}
-	return count, rows.Err()
 }

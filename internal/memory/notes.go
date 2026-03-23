@@ -56,20 +56,7 @@ func (s *Store) ListNotes(featureID, noteType string, limit int) ([]Note, error)
 	}
 	q += ` ORDER BY created_at DESC LIMIT ?`
 	args = append(args, limit)
-	rows, err := s.db.Reader().Query(q, args...)
-	if err != nil {
-		return nil, fmt.Errorf("list notes: %w", err)
-	}
-	defer rows.Close()
-	var out []Note
-	for rows.Next() {
-		n, err := scanNote(rows)
-		if err != nil {
-			return nil, fmt.Errorf("scan note: %w", err)
-		}
-		out = append(out, n)
-	}
-	return out, rows.Err()
+	return collectRows(s.db.Reader(), q, args, func(rows *sql.Rows) (Note, error) { return scanNote(rows) })
 }
 
 func (s *Store) GetNote(noteID string) (*Note, error) {
@@ -81,4 +68,21 @@ func (s *Store) GetNote(noteID string) (*Note, error) {
 		return nil, fmt.Errorf("get note: %w", err)
 	}
 	return &n, nil
+}
+
+func collectRows[T any](r *sql.DB, query string, args []any, fn func(*sql.Rows) (T, error)) ([]T, error) {
+	rows, err := r.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query: %w", err)
+	}
+	defer rows.Close()
+	var out []T
+	for rows.Next() {
+		v, err := fn(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan: %w", err)
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
 }

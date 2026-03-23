@@ -28,21 +28,15 @@ func (s *Store) CreateSession(featureID, tool string) (*Session, error) {
 	return &Session{ID: id, FeatureID: featureID, Tool: tool, StartedAt: now}, nil
 }
 
-func (s *Store) EndSessionWithSummary(sessionID, summary string) error {
+func (s *Store) endSession(sessionID, summary string, withSummary bool) error {
 	now := time.Now().UTC().Format(time.DateTime)
-	res, err := s.db.Writer().Exec(`UPDATE sessions SET ended_at = ?, summary = ? WHERE id = ?`, now, summary, sessionID)
-	if err != nil {
-		return fmt.Errorf("end session with summary: %w", err)
+	var res sql.Result
+	var err error
+	if withSummary {
+		res, err = s.db.Writer().Exec(`UPDATE sessions SET ended_at = ?, summary = ? WHERE id = ?`, now, summary, sessionID)
+	} else {
+		res, err = s.db.Writer().Exec(`UPDATE sessions SET ended_at = ? WHERE id = ?`, now, sessionID)
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return fmt.Errorf("session %q not found", sessionID)
-	}
-	return nil
-}
-
-func (s *Store) EndSession(sessionID string) error {
-	now := time.Now().UTC().Format(time.DateTime)
-	res, err := s.db.Writer().Exec(`UPDATE sessions SET ended_at = ? WHERE id = ?`, now, sessionID)
 	if err != nil {
 		return fmt.Errorf("end session: %w", err)
 	}
@@ -50,6 +44,14 @@ func (s *Store) EndSession(sessionID string) error {
 		return fmt.Errorf("session %q not found", sessionID)
 	}
 	return nil
+}
+
+func (s *Store) EndSessionWithSummary(sessionID, summary string) error {
+	return s.endSession(sessionID, summary, true)
+}
+
+func (s *Store) EndSession(sessionID string) error {
+	return s.endSession(sessionID, "", false)
 }
 
 func (s *Store) GetCurrentSession() (*Session, error) {
@@ -67,18 +69,8 @@ func (s *Store) ListSessions(featureID string, limit int) ([]Session, error) {
 	if limit <= 0 {
 		limit = 50
 	}
-	rows, err := s.db.Reader().Query(`SELECT `+sessionCols+` FROM sessions WHERE feature_id = ? ORDER BY started_at DESC LIMIT ?`, featureID, limit)
-	if err != nil {
-		return nil, fmt.Errorf("list sessions: %w", err)
-	}
-	defer rows.Close()
-	var out []Session
-	for rows.Next() {
-		sess, err := scanSession(rows)
-		if err != nil {
-			return nil, fmt.Errorf("scan session: %w", err)
-		}
-		out = append(out, sess)
-	}
-	return out, rows.Err()
+	return collectRows(s.db.Reader(),
+		`SELECT `+sessionCols+` FROM sessions WHERE feature_id = ? ORDER BY started_at DESC LIMIT ?`,
+		[]any{featureID, limit},
+		func(rows *sql.Rows) (Session, error) { return scanSession(rows) })
 }

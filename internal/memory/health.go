@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"database/sql"
 	"fmt"
 	"math"
 )
@@ -21,7 +22,6 @@ func (s *Store) GetMemoryHealth(featureID string) (*MemoryHealth, error) {
 	h := &MemoryHealth{}
 	r := s.db.Reader()
 	ff, args := featureFilter(featureID)
-
 	var totalNotes int
 	if err := r.QueryRow(`SELECT COUNT(*) FROM notes WHERE 1=1`+ff, args...).Scan(&totalNotes); err != nil {
 		return nil, fmt.Errorf("count notes: %w", err)
@@ -30,14 +30,12 @@ func (s *Store) GetMemoryHealth(featureID string) (*MemoryHealth, error) {
 		return nil, fmt.Errorf("count active facts: %w", err)
 	}
 	h.TotalMemories = totalNotes + h.ActiveFacts
-
 	if err := r.QueryRow(`SELECT COUNT(*) FROM facts WHERE invalid_at IS NOT NULL AND invalid_at < datetime('now', '-30 days')`+ff, args...).Scan(&h.StaleFactCount); err != nil {
 		return nil, fmt.Errorf("count stale facts: %w", err)
 	}
 	if err := r.QueryRow(`SELECT COUNT(*) FROM (SELECT subject, predicate FROM facts WHERE invalid_at IS NULL`+ff+` GROUP BY subject, predicate HAVING COUNT(*) > 1)`, args...).Scan(&h.ConflictCount); err != nil {
 		return nil, fmt.Errorf("count conflicts: %w", err)
 	}
-
 	noLinks := ` AND NOT EXISTS (SELECT 1 FROM memory_links ml WHERE ml.source_id = n.id AND ml.source_type = 'note')
 		AND NOT EXISTS (SELECT 1 FROM memory_links ml WHERE ml.target_id = n.id AND ml.target_type = 'note')`
 	if err := r.QueryRow(`SELECT COUNT(*) FROM notes n WHERE 1=1`+ff+noLinks, args...).Scan(&h.OrphanNoteCount); err != nil {
@@ -46,7 +44,6 @@ func (s *Store) GetMemoryHealth(featureID string) (*MemoryHealth, error) {
 	if err := r.QueryRow(`SELECT COUNT(*) FROM notes n WHERE n.created_at < datetime('now', '-30 days')`+ff+noLinks, args...).Scan(&h.StaleNoteCount); err != nil {
 		return nil, fmt.Errorf("count stale notes: %w", err)
 	}
-
 	summaryQ, summaryArgs := `SELECT COUNT(*) FROM summaries`, []any(nil)
 	if featureID != "" {
 		summaryQ += ` WHERE scope = ?`
@@ -55,13 +52,11 @@ func (s *Store) GetMemoryHealth(featureID string) (*MemoryHealth, error) {
 	if err := r.QueryRow(summaryQ, summaryArgs...).Scan(&h.SummaryCount); err != nil {
 		return nil, fmt.Errorf("count summaries: %w", err)
 	}
-
 	score := 100.0 - float64(h.ConflictCount)*10 - math.Min(float64(h.StaleFactCount), 5)*5 - math.Min(float64(h.OrphanNoteCount), 10)*2
 	if h.SummaryCount == 0 && h.TotalMemories > 20 {
 		score -= 10
 	}
 	h.Score = math.Max(0, math.Min(100, score))
-
 	if h.ConflictCount > 0 {
 		h.Suggestions = append(h.Suggestions, fmt.Sprintf("You have %d contradicting facts. Run consolidation.", h.ConflictCount))
 	}
@@ -85,9 +80,8 @@ func featureFilter(featureID string) (string, []any) {
 }
 
 func (s *Store) ForgetStaleFacts(featureID string) (int, error) {
-	q := `DELETE FROM facts WHERE invalid_at IS NOT NULL AND invalid_at < datetime('now', '-30 days')`
 	ff, args := featureFilter(featureID)
-	result, err := s.db.Writer().Exec(q+ff, args...)
+	result, err := s.db.Writer().Exec(`DELETE FROM facts WHERE invalid_at IS NOT NULL AND invalid_at < datetime('now', '-30 days')`+ff, args...)
 	if err != nil {
 		return 0, fmt.Errorf("forget stale facts: %w", err)
 	}
@@ -97,36 +91,15 @@ func (s *Store) ForgetStaleFacts(featureID string) (int, error) {
 
 func (s *Store) ForgetStaleNotes(featureID string) (int, error) {
 	ff, args := featureFilter(featureID)
-	q := `DELETE FROM notes WHERE id IN (
-		SELECT n.id FROM notes n
-		WHERE n.created_at < datetime('now', '-60 days')` + ff + `
+	result, err := s.db.Writer().Exec(`DELETE FROM notes WHERE id IN (
+		SELECT n.id FROM notes n WHERE n.created_at < datetime('now', '-60 days')`+ff+`
 		AND NOT EXISTS (SELECT 1 FROM memory_links ml WHERE ml.source_id = n.id AND ml.source_type = 'note')
-		AND NOT EXISTS (SELECT 1 FROM memory_links ml WHERE ml.target_id = n.id AND ml.target_type = 'note'))`
-	result, err := s.db.Writer().Exec(q, args...)
+		AND NOT EXISTS (SELECT 1 FROM memory_links ml WHERE ml.target_id = n.id AND ml.target_type = 'note'))`, args...)
 	if err != nil {
 		return 0, fmt.Errorf("forget stale notes: %w", err)
 	}
 	n, _ := result.RowsAffected()
 	return int(n), nil
-}
-
-type deleteOp struct {
-	query string
-	args  func(fid string) []any
-}
-
-var featureDeleteOps = []deleteOp{
-	{`DELETE FROM memory_links WHERE source_id IN (SELECT id FROM notes WHERE feature_id = ?) OR target_id IN (SELECT id FROM notes WHERE feature_id = ?)`, func(fid string) []any { return []any{fid, fid} }},
-	{`DELETE FROM memory_links WHERE source_id IN (SELECT id FROM facts WHERE feature_id = ?) OR target_id IN (SELECT id FROM facts WHERE feature_id = ?)`, func(fid string) []any { return []any{fid, fid} }},
-	{`DELETE FROM summaries WHERE scope = ?`, func(fid string) []any { return []any{"feature:" + fid} }},
-	{`DELETE FROM plan_steps WHERE plan_id IN (SELECT id FROM plans WHERE feature_id = ?)`, func(fid string) []any { return []any{fid} }},
-	{`DELETE FROM plans WHERE feature_id = ?`, func(fid string) []any { return []any{fid} }},
-	{`DELETE FROM semantic_changes WHERE session_id IN (SELECT id FROM sessions WHERE feature_id = ?)`, func(fid string) []any { return []any{fid} }},
-	{`DELETE FROM commits WHERE feature_id = ?`, func(fid string) []any { return []any{fid} }},
-	{`DELETE FROM notes WHERE feature_id = ?`, func(fid string) []any { return []any{fid} }},
-	{`DELETE FROM facts WHERE feature_id = ?`, func(fid string) []any { return []any{fid} }},
-	{`DELETE FROM sessions WHERE feature_id = ?`, func(fid string) []any { return []any{fid} }},
-	{`DELETE FROM features WHERE id = ?`, func(fid string) []any { return []any{fid} }},
 }
 
 func (s *Store) ForgetCompletedFeatures() (int, error) {
@@ -135,7 +108,6 @@ func (s *Store) ForgetCompletedFeatures() (int, error) {
 		return 0, fmt.Errorf("query completed features: %w", err)
 	}
 	defer rows.Close()
-
 	var ids []string
 	for rows.Next() {
 		var id string
@@ -147,16 +119,36 @@ func (s *Store) ForgetCompletedFeatures() (int, error) {
 	if err := rows.Err(); err != nil {
 		return 0, fmt.Errorf("iterate features: %w", err)
 	}
-
 	w := s.db.Writer()
 	for i, fid := range ids {
-		for _, op := range featureDeleteOps {
-			if _, err := w.Exec(op.query, op.args(fid)...); err != nil {
-				return i, fmt.Errorf("delete data for feature %s: %w", fid, err)
-			}
+		if err := s.deleteFeatureData(w, fid); err != nil {
+			return i, err
 		}
 	}
 	return len(ids), nil
+}
+
+func (s *Store) deleteFeatureData(w *sql.DB, fid string) error {
+	noteIDs := `SELECT id FROM notes WHERE feature_id = ?`
+	factIDs := `SELECT id FROM facts WHERE feature_id = ?`
+	for _, q := range []struct{ query string; args []any }{
+		{`DELETE FROM memory_links WHERE source_id IN (` + noteIDs + `) OR target_id IN (` + noteIDs + `)`, []any{fid, fid}},
+		{`DELETE FROM memory_links WHERE source_id IN (` + factIDs + `) OR target_id IN (` + factIDs + `)`, []any{fid, fid}},
+		{`DELETE FROM summaries WHERE scope = 'feature:' || ?`, []any{fid}},
+		{`DELETE FROM plan_steps WHERE plan_id IN (SELECT id FROM plans WHERE feature_id = ?)`, []any{fid}},
+		{`DELETE FROM plans WHERE feature_id = ?`, []any{fid}},
+		{`DELETE FROM semantic_changes WHERE session_id IN (SELECT id FROM sessions WHERE feature_id = ?)`, []any{fid}},
+		{`DELETE FROM commits WHERE feature_id = ?`, []any{fid}},
+		{`DELETE FROM notes WHERE feature_id = ?`, []any{fid}},
+		{`DELETE FROM facts WHERE feature_id = ?`, []any{fid}},
+		{`DELETE FROM sessions WHERE feature_id = ?`, []any{fid}},
+		{`DELETE FROM features WHERE id = ?`, []any{fid}},
+	} {
+		if _, err := w.Exec(q.query, q.args...); err != nil {
+			return fmt.Errorf("delete data for feature %s: %w", fid, err)
+		}
+	}
+	return nil
 }
 
 func (s *Store) ForgetByID(id string) (string, error) {

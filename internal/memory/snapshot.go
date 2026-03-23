@@ -64,7 +64,7 @@ func loadConsolidationSnapshot(r *sql.DB) ConsolidationSnapshot {
 
 func (s *Store) WriteSnapshot(memDir, projectName, projectPath string) error {
 	r := s.db.Reader()
-	snap := Snapshot{Project: projectName, ProjectPath: projectPath}
+	snap := Snapshot{Project: projectName, ProjectPath: projectPath, Consolidation: loadConsolidationSnapshot(r)}
 	features, err := s.ListFeatures("all")
 	if err != nil {
 		return fmt.Errorf("snapshot list features: %w", err)
@@ -87,7 +87,6 @@ func (s *Store) WriteSnapshot(memDir, projectName, projectPath string) error {
 			snap.ActivePlan = loadPlanSnapshot(r, fid)
 		}
 	}
-	snap.Consolidation = loadConsolidationSnapshot(r)
 	data, err := json.MarshalIndent(snap, "", "  ")
 	if err != nil {
 		return fmt.Errorf("snapshot marshal: %w", err)

@@ -11,23 +11,24 @@ func (s *Store) GenerateAgentsMD() (string, error) {
 
 	feature, featureErr := s.GetActiveFeature()
 
-	writeSection := func(title, empty string, load func() ([]string, error)) {
+	writeItems := func(title, empty string, load func() ([]string, error)) {
 		b.WriteString("## " + title + "\n\n")
 		if featureErr != nil {
-			b.WriteString(empty + "\n")
+			b.WriteString(empty + "\n\n")
 			return
 		}
 		items, err := load()
 		if err != nil || len(items) == 0 {
-			b.WriteString(empty + "\n")
+			b.WriteString(empty + "\n\n")
 			return
 		}
 		for _, item := range items {
 			b.WriteString("- " + strings.ReplaceAll(item, "\n", " ") + "\n")
 		}
+		b.WriteString("\n")
 	}
 
-	writeSection("Project Context", "No active feature. Start a feature to populate context.", func() ([]string, error) {
+	writeItems("Project Context", "No active feature. Start a feature to populate context.", func() ([]string, error) {
 		facts, err := s.GetActiveFacts(feature.ID)
 		if err != nil {
 			return nil, err
@@ -38,7 +39,6 @@ func (s *Store) GenerateAgentsMD() (string, error) {
 		}
 		return out, nil
 	})
-	b.WriteString("\n")
 
 	b.WriteString("## Active Feature\n\n")
 	if featureErr == nil {
@@ -59,8 +59,8 @@ func (s *Store) GenerateAgentsMD() (string, error) {
 	}
 	b.WriteString("\n")
 
-	noteSection := func(title, noteType, empty string) {
-		writeSection(title, empty, func() ([]string, error) {
+	noteItems := func(noteType string) func() ([]string, error) {
+		return func() ([]string, error) {
 			notes, err := s.ListNotes(feature.ID, noteType, 10)
 			if err != nil {
 				return nil, err
@@ -70,17 +70,13 @@ func (s *Store) GenerateAgentsMD() (string, error) {
 				out[i] = n.Content
 			}
 			return out, nil
-		})
-		b.WriteString("\n")
+		}
 	}
-	noteSection("Key Decisions", "decision", "No decisions recorded yet.")
-	noteSection("Current Blockers", "blocker", "No blockers.")
-	noteSection("Next Steps", "next_step", "No next steps recorded yet.")
+	writeItems("Key Decisions", "No decisions recorded yet.", noteItems("decision"))
+	writeItems("Current Blockers", "No blockers.", noteItems("blocker"))
+	writeItems("Next Steps", "No next steps recorded yet.", noteItems("next_step"))
 
-	b.WriteString("## Session Protocol\n\n")
-	b.WriteString("At the start of every session, call devmem_briefing to load context.\n")
-	b.WriteString("When making decisions, call devmem_remember with type=\"decision\".\n")
-	b.WriteString("Before ending a session, call devmem_end_session with a summary.\n")
+	b.WriteString("## Session Protocol\n\nAt the start of every session, call devmem_briefing to load context.\nWhen making decisions, call devmem_remember with type=\"decision\".\nBefore ending a session, call devmem_end_session with a summary.\n")
 
 	return b.String(), nil
 }

@@ -34,19 +34,14 @@ func countRows(r *sql.DB, query string, args ...interface{}) int {
 }
 
 func detectBranch() string {
-	cwd, err := os.Getwd()
-	if err != nil {
-		return ""
+	if cwd, err := os.Getwd(); err == nil {
+		if root, err := git.FindGitRoot(cwd); err == nil {
+			if b, err := git.CurrentBranch(root); err == nil {
+				return b
+			}
+		}
 	}
-	root, err := git.FindGitRoot(cwd)
-	if err != nil {
-		return ""
-	}
-	branch, err := git.CurrentBranch(root)
-	if err != nil {
-		return ""
-	}
-	return branch
+	return ""
 }
 
 func (s *Store) insertFeature(name, description, now string) (*Feature, error) {
@@ -82,20 +77,13 @@ func (s *Store) ListFeatures(statusFilter string) ([]Feature, error) {
 		args = append(args, statusFilter)
 	}
 	q += ` ORDER BY last_active DESC`
-	rows, err := s.db.Reader().Query(q, args...)
-	if err != nil {
-		return nil, fmt.Errorf("list features: %w", err)
-	}
-	defer rows.Close()
-	var out []Feature
-	for rows.Next() {
+	return collectRows(s.db.Reader(), q, args, func(rows *sql.Rows) (Feature, error) {
 		f, err := scanFeature(rows)
 		if err != nil {
-			return nil, fmt.Errorf("scan feature: %w", err)
+			return Feature{}, err
 		}
-		out = append(out, *f)
-	}
-	return out, rows.Err()
+		return *f, nil
+	})
 }
 
 func (s *Store) UpdateFeatureStatus(name, status string) error {
