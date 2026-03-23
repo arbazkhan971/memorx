@@ -400,15 +400,14 @@ func (s *DevMemServer) handleSearch(ctx context.Context, req mcplib.CallToolRequ
 	}
 
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("# Search results for: %s\n\n", query))
-	b.WriteString(fmt.Sprintf("Found %d results (scope: %s)\n\n", len(results), scope))
+	b.WriteString(fmt.Sprintf("Search results for %q (%d, scope:%s)\n", query, len(results), scope))
 
-	for i, r := range results {
-		b.WriteString(fmt.Sprintf("## %d. [%s] %s\n", i+1, r.Type, truncate(r.Content, 120)))
+	for _, r := range results {
+		feature := ""
 		if r.FeatureName != "" {
-			b.WriteString(fmt.Sprintf("  Feature: %s\n", r.FeatureName))
+			feature = " " + r.FeatureName
 		}
-		b.WriteString(fmt.Sprintf("  Relevance: %.2f | Created: %s\n\n", r.Relevance, r.CreatedAt))
+		b.WriteString(fmt.Sprintf("[%s] %q (%.2f)%s\n", r.Type, truncate(r.Content, 100), r.Relevance, feature))
 	}
 
 	return mcplib.NewToolResultText(b.String()), nil
@@ -519,12 +518,11 @@ func (s *DevMemServer) handleImportSession(ctx context.Context, req mcplib.CallT
 	}
 	s.currentSessionID = sess.ID
 
-	var b strings.Builder
-	b.WriteString(fmt.Sprintf("# Importing session into: %s\n\n", featureName))
-
 	imported := 0
+	var parts []string
 
 	// Import note types
+	noteLabels := map[string]string{"decision": "decisions", "progress": "progress", "blocker": "blockers", "next_step": "next_steps"}
 	for _, nt := range []struct{ arg, noteType, label string }{
 		{"decisions", "decision", "Decisions"},
 		{"progress_notes", "progress", "Progress notes"},
@@ -532,17 +530,18 @@ func (s *DevMemServer) handleImportSession(ctx context.Context, req mcplib.CallT
 		{"next_steps", "next_step", "Next steps"},
 	} {
 		notes := getStringSliceArg(req, nt.arg)
-		imported += importNotes(s.store, feature.ID, sess.ID, notes, nt.noteType)
-		if len(notes) > 0 {
-			b.WriteString(fmt.Sprintf("- %s imported: %d\n", nt.label, len(notes)))
+		count := importNotes(s.store, feature.ID, sess.ID, notes, nt.noteType)
+		imported += count
+		if count > 0 {
+			parts = append(parts, fmt.Sprintf("%d %s", count, noteLabels[nt.noteType]))
 		}
 	}
 
 	// Import facts
 	args := req.GetArguments()
+	factCount := 0
 	if factsRaw, ok := args["facts"]; ok {
 		if factsArr, ok := factsRaw.([]interface{}); ok {
-			factCount := 0
 			for _, item := range factsArr {
 				m, ok := item.(map[string]interface{})
 				if !ok {
@@ -560,12 +559,13 @@ func (s *DevMemServer) handleImportSession(ctx context.Context, req mcplib.CallT
 				}
 			}
 			if factCount > 0 {
-				b.WriteString(fmt.Sprintf("- Facts imported: %d\n", factCount))
+				parts = append(parts, fmt.Sprintf("%d facts", factCount))
 			}
 		}
 	}
 
 	// Import plan
+	var planInfo string
 	planTitle := getStringArg(req, "plan_title", "")
 	if planTitle != "" {
 		if planStepsRaw, ok := args["plan_steps"]; ok {
@@ -590,7 +590,6 @@ func (s *DevMemServer) handleImportSession(ctx context.Context, req mcplib.CallT
 				if len(steps) > 0 {
 					plan, err := s.planManager.CreatePlan(feature.ID, sess.ID, planTitle, "", "import", steps)
 					if err == nil {
-						// Mark completed steps
 						planSteps, _ := s.planManager.GetPlanSteps(plan.ID)
 						for _, ps := range planSteps {
 							for _, ct := range completedStepTitles {
@@ -599,7 +598,8 @@ func (s *DevMemServer) handleImportSession(ctx context.Context, req mcplib.CallT
 								}
 							}
 						}
-						b.WriteString(fmt.Sprintf("- Plan imported: %s (%d steps, %d completed)\n", planTitle, len(steps), len(completedStepTitles)))
+						parts = append(parts, fmt.Sprintf("%d-step plan", len(steps)))
+						planInfo = fmt.Sprintf(" | Plan imported: %s (%d/%d done)", planTitle, len(completedStepTitles), len(steps))
 						imported += len(steps)
 					}
 				}
@@ -610,7 +610,6 @@ func (s *DevMemServer) handleImportSession(ctx context.Context, req mcplib.CallT
 	// Auto-link all imported memories
 	linksCreated := 0
 	if imported > 0 {
-		// Run auto-linking on the most recent notes
 		notes, _ := s.store.ListNotes(feature.ID, "", imported)
 		for _, n := range notes {
 			count, _ := s.store.AutoLink(n.ID, "note", n.Content)
@@ -618,8 +617,40 @@ func (s *DevMemServer) handleImportSession(ctx context.Context, req mcplib.CallT
 		}
 	}
 
-	b.WriteString(fmt.Sprintf("\n**Total imported:** %d items, %d links created\n", imported, linksCreated))
-	b.WriteString("\nMemory is now bootstrapped. Future sessions will have this context.")
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("Importing session into: %s — ", featureName))
+	if len(parts) > 0 {
+		b.WriteString(strings.Join(parts, ", "))
+	} else {
+		b.WriteString("0 items")
+	}
+	if linksCreated > 0 {
+		b.WriteString(fmt.Sprintf(" | %d links", linksCreated))
+	}
+	b.WriteString("\n")
+	// Write per-type counts on a detail line
+	detailParts := []string{}
+	for _, nt := range []struct{ arg, label string }{
+		{"decisions", "Decisions"},
+		{"progress_notes", "Progress notes"},
+		{"blockers", "Blockers"},
+		{"next_steps", "Next steps"},
+	} {
+		notes := getStringSliceArg(req, nt.arg)
+		if len(notes) > 0 {
+			detailParts = append(detailParts, fmt.Sprintf("%s imported: %d", nt.label, len(notes)))
+		}
+	}
+	if factCount > 0 {
+		detailParts = append(detailParts, fmt.Sprintf("Facts imported: %d", factCount))
+	}
+	if len(detailParts) > 0 {
+		b.WriteString(strings.Join(detailParts, ", "))
+	}
+	if planInfo != "" {
+		b.WriteString(planInfo)
+	}
+	b.WriteString("\n")
 
 	return mcplib.NewToolResultText(b.String()), nil
 }
@@ -714,22 +745,19 @@ func (s *DevMemServer) handleExport(ctx context.Context, req mcplib.CallToolRequ
 func (s *DevMemServer) exportMarkdown(feature *memory.Feature, ctx *memory.Context) (*mcplib.CallToolResult, error) {
 	var b strings.Builder
 
-	b.WriteString(fmt.Sprintf("# Feature: %s\n\n", feature.Name))
-	b.WriteString(fmt.Sprintf("**Status:** %s\n", feature.Status))
+	b.WriteString(fmt.Sprintf("# Feature: %s\n", feature.Name))
+	b.WriteString(fmt.Sprintf("**Status:** %s", feature.Status))
 	if feature.Branch != "" {
-		b.WriteString(fmt.Sprintf("**Branch:** %s\n", feature.Branch))
+		b.WriteString(fmt.Sprintf(" | **Branch:** %s", feature.Branch))
 	}
 	if feature.Description != "" {
-		b.WriteString(fmt.Sprintf("**Description:** %s\n", feature.Description))
+		b.WriteString(fmt.Sprintf(" | **Description:** %s", feature.Description))
 	}
-	b.WriteString(fmt.Sprintf("**Created:** %s\n", feature.CreatedAt))
-	b.WriteString(fmt.Sprintf("**Last Active:** %s\n\n", feature.LastActive))
+	b.WriteString(fmt.Sprintf("\n**Created:** %s | **Last Active:** %s\n", feature.CreatedAt, feature.LastActive))
 
 	// Plan
 	if ctx.Plan != nil {
-		b.WriteString(fmt.Sprintf("## Plan: %s\n\n", ctx.Plan.Title))
-		b.WriteString(fmt.Sprintf("Progress: %d/%d steps\n\n", ctx.Plan.CompletedStep, ctx.Plan.TotalSteps))
-		// Get plan steps via the active plan for this feature
+		b.WriteString(fmt.Sprintf("\n## Plan: %s (%d/%d steps)\n", ctx.Plan.Title, ctx.Plan.CompletedStep, ctx.Plan.TotalSteps))
 		activePlan, err := s.planManager.GetActivePlan(feature.ID)
 		if err == nil {
 			planSteps, _ := s.planManager.GetPlanSteps(activePlan.ID)
@@ -743,7 +771,6 @@ func (s *DevMemServer) exportMarkdown(feature *memory.Feature, ctx *memory.Conte
 				b.WriteString(fmt.Sprintf("- %s %s\n", check, st.Title))
 			}
 		}
-		b.WriteString("\n")
 	}
 
 	// Note sections (decisions, progress, blockers)
@@ -754,39 +781,37 @@ func (s *DevMemServer) exportMarkdown(feature *memory.Feature, ctx *memory.Conte
 	} {
 		notes, _ := s.store.ListNotes(feature.ID, sec.noteType, 50)
 		if len(notes) == 0 && sec.emptyMsg == "" {
-			continue // skip section entirely (e.g. blockers)
+			continue
 		}
 		writeNoteSection(&b, sec.title, sec.emptyMsg, notes)
 	}
 
 	// Facts
-	b.WriteString("## Facts (Current)\n\n")
+	b.WriteString("## Facts (Current)\n")
 	if len(ctx.ActiveFacts) == 0 {
-		b.WriteString("_No facts recorded._\n\n")
+		b.WriteString("_No facts recorded._\n")
 	}
 	for _, f := range ctx.ActiveFacts {
 		b.WriteString(fmt.Sprintf("- %s **%s** %s\n", f.Subject, f.Predicate, f.Object))
 	}
-	b.WriteString("\n")
 
 	// Commits
-	b.WriteString("## Commits\n\n")
+	b.WriteString("## Commits\n")
 	if len(ctx.RecentCommits) == 0 {
-		b.WriteString("_No commits synced._\n\n")
+		b.WriteString("_No commits synced._\n")
 	}
 	for _, c := range ctx.RecentCommits {
 		b.WriteString(fmt.Sprintf("- `%s` %s (%s)\n", c.Hash[:min(7, len(c.Hash))], c.Message, c.CommittedAt))
 	}
-	b.WriteString("\n")
 
 	// Sessions
-	b.WriteString("## Session History\n\n")
+	b.WriteString("## Session History\n")
 	for _, sess := range ctx.SessionHistory {
 		ended := "active"
 		if sess.EndedAt != "" {
 			ended = sess.EndedAt
 		}
-		b.WriteString(fmt.Sprintf("- %s → %s (%s)\n", sess.StartedAt, ended, sess.Tool))
+		b.WriteString(fmt.Sprintf("- %s -> %s (%s)\n", sess.StartedAt, ended, sess.Tool))
 	}
 
 	return mcplib.NewToolResultText(b.String()), nil
@@ -821,63 +846,64 @@ func writeNoteSection(b *strings.Builder, title, emptyMsg string, notes []memory
 	b.WriteString("\n")
 }
 
-// writeContextSection writes a "### title" section with formatted items, skipped if empty.
+// writeContextSection writes a compact "Title:" line followed by items, skipped if empty.
 func writeContextSection[T any](b *strings.Builder, title string, items []T, format func(T) string) {
 	if len(items) == 0 {
 		return
 	}
-	b.WriteString(fmt.Sprintf("\n### %s\n", title))
+	fmt.Fprintf(b, "%s:", title)
 	for _, item := range items {
-		b.WriteString(format(item) + "\n")
+		fmt.Fprintf(b, " %s;", format(item))
 	}
+	b.WriteString("\n")
 }
 
-// formatContext formats a Context struct into readable markdown.
+// formatContext formats a Context struct into compact single-line-per-section output.
 func formatContext(ctx *memory.Context) string {
 	var b strings.Builder
 
 	if ctx.Feature != nil {
-		b.WriteString(fmt.Sprintf("## Context: %s [%s]\n\n", ctx.Feature.Name, ctx.Feature.Status))
+		fmt.Fprintf(&b, "%s [%s]", ctx.Feature.Name, ctx.Feature.Status)
 		if ctx.Feature.Branch != "" {
-			b.WriteString(fmt.Sprintf("Branch: %s\n", ctx.Feature.Branch))
+			fmt.Fprintf(&b, " branch:%s", ctx.Feature.Branch)
 		}
+		b.WriteString("\n")
 	}
 
 	if ctx.LastSessionSummary != "" {
-		b.WriteString(fmt.Sprintf("\n### Last Session\n%s\n", ctx.LastSessionSummary))
+		fmt.Fprintf(&b, "LastSession: %s\n", strings.ReplaceAll(ctx.LastSessionSummary, "\n", " "))
 	}
 
 	if ctx.Summary != "" {
-		b.WriteString(fmt.Sprintf("\n### Summary\n%s\n", ctx.Summary))
+		fmt.Fprintf(&b, "Summary: %s\n", strings.ReplaceAll(ctx.Summary, "\n", " "))
 	}
 
 	if ctx.Plan != nil {
-		b.WriteString(fmt.Sprintf("\n### Plan: %s\n", ctx.Plan.Title))
-		b.WriteString(fmt.Sprintf("Progress: %d/%d steps completed\n", ctx.Plan.CompletedStep, ctx.Plan.TotalSteps))
+		fmt.Fprintf(&b, "Plan: %s %d/%d\n", ctx.Plan.Title, ctx.Plan.CompletedStep, ctx.Plan.TotalSteps)
 	}
 
-	writeContextSection(&b, "Recent Commits", ctx.RecentCommits, func(c memory.CommitInfo) string {
-		return fmt.Sprintf("- `%s` %s (%s)", c.Hash[:min(7, len(c.Hash))], c.Message, c.CommittedAt)
+	writeContextSection(&b, "Commits", ctx.RecentCommits, func(c memory.CommitInfo) string {
+		return fmt.Sprintf("%s %s", c.Hash[:min(7, len(c.Hash))], c.Message)
 	})
-	writeContextSection(&b, "Recent Notes", ctx.RecentNotes, func(n memory.Note) string {
-		return fmt.Sprintf("- [%s] %s (%s)", n.Type, truncate(n.Content, 100), n.CreatedAt)
+	writeContextSection(&b, "Notes", ctx.RecentNotes, func(n memory.Note) string {
+		return fmt.Sprintf("[%s] %s", n.Type, truncate(n.Content, 100))
 	})
-	writeContextSection(&b, "Active Facts", ctx.ActiveFacts, func(f memory.Fact) string {
-		return fmt.Sprintf("- %s %s %s", f.Subject, f.Predicate, f.Object)
+	writeContextSection(&b, "Facts", ctx.ActiveFacts, func(f memory.Fact) string {
+		return fmt.Sprintf("%s %s %s", f.Subject, f.Predicate, f.Object)
 	})
-	writeContextSection(&b, "Session History", ctx.SessionHistory, func(sess memory.Session) string {
+	writeContextSection(&b, "Sessions", ctx.SessionHistory, func(sess memory.Session) string {
 		ended := "active"
 		if sess.EndedAt != "" {
 			ended = sess.EndedAt
 		}
-		return fmt.Sprintf("- %s: %s -> %s (%s)", sess.ID[:8], sess.StartedAt, ended, sess.Tool)
+		return fmt.Sprintf("%s %s->%s %s", sess.ID[:8], sess.StartedAt, ended, sess.Tool)
 	})
-	writeContextSection(&b, "Memory Links", ctx.Links, func(l memory.MemoryLink) string {
-		return fmt.Sprintf("- %s:%s -> %s:%s [%s, %.1f]",
+	writeContextSection(&b, "Links", ctx.Links, func(l memory.MemoryLink) string {
+		return fmt.Sprintf("%s:%s->%s:%s[%s,%.1f]",
 			l.SourceType, l.SourceID[:8], l.TargetType, l.TargetID[:8], l.Relationship, l.Strength)
 	})
-	writeContextSection(&b, "Files Touched", ctx.FilesTouched, func(f string) string {
-		return fmt.Sprintf("- %s", f)
+	writeContextSection(&b, "Files", ctx.FilesTouched, func(f string) string {
+		return f
 	})
 
 	return b.String()
@@ -914,31 +940,23 @@ func (s *DevMemServer) handleFeatureAnalytics(featureName string) (*mcplib.CallT
 	}
 
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("# Feature Analytics: %s\n\n", a.Name))
-	b.WriteString(fmt.Sprintf("**Age:** %d days (last active %d days ago)\n", a.DaysSinceCreated, a.DaysSinceLastActive))
-	b.WriteString(fmt.Sprintf("**Avg session duration:** %s\n\n", a.AvgSessionDuration))
-
-	b.WriteString("## Activity Counts\n\n")
-	b.WriteString("| Metric | Count |\n")
-	b.WriteString("|--------|-------|\n")
-	b.WriteString(fmt.Sprintf("| Sessions | %d |\n", a.SessionCount))
-	b.WriteString(fmt.Sprintf("| Commits | %d |\n", a.CommitCount))
-	b.WriteString(fmt.Sprintf("| Notes | %d |\n", a.NoteCount))
-	b.WriteString(fmt.Sprintf("| Decisions | %d |\n", a.DecisionCount))
-	b.WriteString(fmt.Sprintf("| Blockers | %d |\n", a.BlockerCount))
-	b.WriteString(fmt.Sprintf("| Facts (active) | %d |\n", a.ActiveFactCount))
-	b.WriteString(fmt.Sprintf("| Facts (invalidated) | %d |\n", a.InvalidatedFactCount))
-
-	b.WriteString(fmt.Sprintf("\n## Plan Progress\n\n%s\n", a.PlanProgress))
-
+	b.WriteString(fmt.Sprintf("%s: %d sessions, %d commits", a.Name, a.SessionCount, a.CommitCount))
+	// Append intent breakdown inline if available
 	if len(a.IntentBreakdown) > 0 {
-		b.WriteString("\n## Commit Intent Breakdown\n\n")
-		b.WriteString("| Intent | Count |\n")
-		b.WriteString("|--------|-------|\n")
+		b.WriteString(" (")
+		first := true
 		for intent, count := range a.IntentBreakdown {
-			b.WriteString(fmt.Sprintf("| %s | %d |\n", intent, count))
+			if !first {
+				b.WriteString(", ")
+			}
+			b.WriteString(fmt.Sprintf("%d %s", count, intent))
+			first = false
 		}
+		b.WriteString(")")
 	}
+	b.WriteString(fmt.Sprintf(", %d decisions, %d blockers\n", a.DecisionCount, a.BlockerCount))
+	b.WriteString(fmt.Sprintf("plan: %s | age: %dd, last active: %dd ago, avg session: %s\n", a.PlanProgress, a.DaysSinceCreated, a.DaysSinceLastActive, a.AvgSessionDuration))
+	b.WriteString(fmt.Sprintf("notes:%d facts:%d (active:%d invalidated:%d)\n", a.NoteCount, a.FactCount, a.ActiveFactCount, a.InvalidatedFactCount))
 
 	return mcplib.NewToolResultText(b.String()), nil
 }
@@ -950,36 +968,22 @@ func (s *DevMemServer) handleProjectAnalytics() (*mcplib.CallToolResult, error) 
 	}
 
 	var b strings.Builder
-	b.WriteString("# Project Analytics\n\n")
+	b.WriteString(fmt.Sprintf("features: %d total (%d active, %d paused, %d done)\n", a.TotalFeatures, a.ActiveFeatures, a.PausedFeatures, a.DoneFeatures))
+	b.WriteString(fmt.Sprintf("totals: sessions:%d commits:%d notes:%d facts:%d\n", a.TotalSessions, a.TotalCommits, a.TotalNotes, a.TotalFacts))
 
-	b.WriteString("## Features\n\n")
-	b.WriteString("| Status | Count |\n")
-	b.WriteString("|--------|-------|\n")
-	b.WriteString(fmt.Sprintf("| Total | %d |\n", a.TotalFeatures))
-	b.WriteString(fmt.Sprintf("| Active | %d |\n", a.ActiveFeatures))
-	b.WriteString(fmt.Sprintf("| Paused | %d |\n", a.PausedFeatures))
-	b.WriteString(fmt.Sprintf("| Done | %d |\n", a.DoneFeatures))
-
-	b.WriteString("\n## Totals\n\n")
-	b.WriteString("| Metric | Count |\n")
-	b.WriteString("|--------|-------|\n")
-	b.WriteString(fmt.Sprintf("| Sessions | %d |\n", a.TotalSessions))
-	b.WriteString(fmt.Sprintf("| Commits | %d |\n", a.TotalCommits))
-	b.WriteString(fmt.Sprintf("| Notes | %d |\n", a.TotalNotes))
-	b.WriteString(fmt.Sprintf("| Facts | %d |\n", a.TotalFacts))
-
-	if a.MostActiveFeature != "" {
-		b.WriteString(fmt.Sprintf("\n**Most active feature:** %s\n", a.MostActiveFeature))
-	}
-	if a.MostBlockedFeature != "" {
-		b.WriteString(fmt.Sprintf("**Most blocked feature:** %s\n", a.MostBlockedFeature))
+	if a.MostActiveFeature != "" || a.MostBlockedFeature != "" {
+		parts := []string{}
+		if a.MostActiveFeature != "" {
+			parts = append(parts, fmt.Sprintf("most active: %s", a.MostActiveFeature))
+		}
+		if a.MostBlockedFeature != "" {
+			parts = append(parts, fmt.Sprintf("most blocked: %s", a.MostBlockedFeature))
+		}
+		b.WriteString(strings.Join(parts, " | ") + "\n")
 	}
 
 	if len(a.RecentActivity) > 0 {
-		b.WriteString("\n## Recent Activity\n\n")
-		for _, activity := range a.RecentActivity {
-			b.WriteString(fmt.Sprintf("- %s\n", activity))
-		}
+		b.WriteString("recent: " + strings.Join(a.RecentActivity, "; ") + "\n")
 	}
 
 	return mcplib.NewToolResultText(b.String()), nil
@@ -1004,31 +1008,17 @@ func (s *DevMemServer) handleHealth(ctx context.Context, req mcplib.CallToolRequ
 	}
 
 	var b strings.Builder
-	scope := "All Features"
+	scope := "all"
 	if featureName != "" {
 		scope = featureName
 	}
-	b.WriteString(fmt.Sprintf("# Memory Health: %s\n\n", scope))
-	b.WriteString(fmt.Sprintf("**Score: %.0f/100**\n\n", h.Score))
-
-	b.WriteString("## Metrics\n\n")
-	b.WriteString("| Metric | Count |\n")
-	b.WriteString("|--------|-------|\n")
-	b.WriteString(fmt.Sprintf("| Total memories | %d |\n", h.TotalMemories))
-	b.WriteString(fmt.Sprintf("| Active facts | %d |\n", h.ActiveFacts))
-	b.WriteString(fmt.Sprintf("| Stale facts | %d |\n", h.StaleFactCount))
-	b.WriteString(fmt.Sprintf("| Conflicts | %d |\n", h.ConflictCount))
-	b.WriteString(fmt.Sprintf("| Orphan notes | %d |\n", h.OrphanNoteCount))
-	b.WriteString(fmt.Sprintf("| Stale notes | %d |\n", h.StaleNoteCount))
-	b.WriteString(fmt.Sprintf("| Summaries | %d |\n", h.SummaryCount))
+	b.WriteString(fmt.Sprintf("health[%s]: %.0f/100 | facts:%d stale:%d conflicts:%d orphans:%d stale-notes:%d summaries:%d total:%d\n",
+		scope, h.Score, h.ActiveFacts, h.StaleFactCount, h.ConflictCount, h.OrphanNoteCount, h.StaleNoteCount, h.SummaryCount, h.TotalMemories))
 
 	if len(h.Suggestions) > 0 {
-		b.WriteString("\n## Suggestions\n\n")
-		for _, suggestion := range h.Suggestions {
-			b.WriteString(fmt.Sprintf("- %s\n", suggestion))
-		}
+		b.WriteString("suggestions: " + strings.Join(h.Suggestions, "; ") + "\n")
 	} else {
-		b.WriteString("\nMemory is healthy. No issues found.\n")
+		b.WriteString("no issues found\n")
 	}
 
 	return mcplib.NewToolResultText(b.String()), nil
