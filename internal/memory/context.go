@@ -7,25 +7,21 @@ import (
 )
 
 type Context struct {
-	Feature            *Feature
-	Summary            string
-	LastSessionSummary string
-	Plan               *PlanInfo
-	RecentCommits      []CommitInfo
-	RecentNotes        []Note
-	ActiveFacts        []Fact
-	Links              []MemoryLink
-	SessionHistory     []Session
-	FilesTouched       []string
+	Feature                        *Feature
+	Summary, LastSessionSummary    string
+	Plan                           *PlanInfo
+	RecentCommits                  []CommitInfo
+	RecentNotes                    []Note
+	ActiveFacts                    []Fact
+	Links                          []MemoryLink
+	SessionHistory                 []Session
+	FilesTouched                   []string
 }
-
 type PlanInfo struct {
-	Title, Status                string
-	TotalSteps, CompletedStep    int
+	Title, Status             string
+	TotalSteps, CompletedStep int
 }
-
 type CommitInfo struct{ Hash, Message, Author, CommittedAt string }
-
 type tierCfg struct {
 	commits, notes, sessions int
 	facts, links, files      bool
@@ -56,13 +52,10 @@ func (s *Store) GetContext(featureID, tier string, asOf *time.Time) (*Context, e
 	if r.QueryRow(`SELECT COALESCE(summary, '') FROM sessions WHERE feature_id = ? AND ended_at IS NOT NULL AND summary != '' ORDER BY ended_at DESC LIMIT 1`, featureID).Scan(&lastSess) == nil && lastSess != "" {
 		ctx.LastSessionSummary = lastSess
 	}
-	ctx.RecentCommits = scanRows(r,
-		`SELECT hash, message, author, committed_at FROM commits WHERE feature_id = ? ORDER BY committed_at DESC LIMIT ?`,
-		[]any{featureID, tc.commits},
-		func(rows *sql.Rows) (CommitInfo, error) {
-			var c CommitInfo
-			return c, rows.Scan(&c.Hash, &c.Message, &c.Author, &c.CommittedAt)
-		})
+	ctx.RecentCommits = scanRows(r, `SELECT hash, message, author, committed_at FROM commits WHERE feature_id = ? ORDER BY committed_at DESC LIMIT ?`, []any{featureID, tc.commits}, func(rows *sql.Rows) (CommitInfo, error) {
+		var c CommitInfo
+		return c, rows.Scan(&c.Hash, &c.Message, &c.Author, &c.CommittedAt)
+	})
 	if tc.notes > 0 {
 		ctx.RecentNotes, _ = s.ListNotes(featureID, "", tc.notes)
 	}
@@ -77,31 +70,16 @@ func (s *Store) GetContext(featureID, tier string, asOf *time.Time) (*Context, e
 		ctx.SessionHistory, _ = s.ListSessions(featureID, tc.sessions)
 	}
 	if tc.links {
-		ctx.Links = scanRows(r,
-			`SELECT ml.id, ml.source_id, ml.source_type, ml.target_id, ml.target_type,
-			        ml.relationship, ml.strength, ml.created_at
-			 FROM memory_links ml WHERE ml.source_id IN (
-				SELECT id FROM notes WHERE feature_id = ?
-				UNION SELECT id FROM facts WHERE feature_id = ?
-				UNION SELECT id FROM commits WHERE feature_id = ?
-			 ) ORDER BY ml.strength DESC, ml.created_at DESC LIMIT 50`,
-			[]any{featureID, featureID, featureID},
-			func(rows *sql.Rows) (MemoryLink, error) {
-				var l MemoryLink
-				return l, rows.Scan(&l.ID, &l.SourceID, &l.SourceType, &l.TargetID, &l.TargetType,
-					&l.Relationship, &l.Strength, &l.CreatedAt)
-			})
+		ctx.Links = scanRows(r, `SELECT ml.id, ml.source_id, ml.source_type, ml.target_id, ml.target_type, ml.relationship, ml.strength, ml.created_at FROM memory_links ml WHERE ml.source_id IN (SELECT id FROM notes WHERE feature_id = ? UNION SELECT id FROM facts WHERE feature_id = ? UNION SELECT id FROM commits WHERE feature_id = ?) ORDER BY ml.strength DESC, ml.created_at DESC LIMIT 50`, []any{featureID, featureID, featureID}, func(rows *sql.Rows) (MemoryLink, error) {
+			var l MemoryLink
+			return l, rows.Scan(&l.ID, &l.SourceID, &l.SourceType, &l.TargetID, &l.TargetType, &l.Relationship, &l.Strength, &l.CreatedAt)
+		})
 	}
 	if tc.files {
-		ctx.FilesTouched = scanRows(r,
-			`SELECT DISTINCT file_path FROM semantic_changes sc
-			 JOIN commits c ON sc.commit_hash = c.hash
-			 WHERE c.feature_id = ? ORDER BY file_path`,
-			[]any{featureID},
-			func(rows *sql.Rows) (string, error) {
-				var f string
-				return f, rows.Scan(&f)
-			})
+		ctx.FilesTouched = scanRows(r, `SELECT DISTINCT file_path FROM semantic_changes sc JOIN commits c ON sc.commit_hash = c.hash WHERE c.feature_id = ? ORDER BY file_path`, []any{featureID}, func(rows *sql.Rows) (string, error) {
+			var f string
+			return f, rows.Scan(&f)
+		})
 	}
 	return ctx, nil
 }
