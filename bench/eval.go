@@ -158,22 +158,17 @@ func (e *Evaluator) Reset() error {
 }
 
 func paramStr(p map[string]interface{}, key string) string {
-	v, ok := p[key]
-	if !ok {
-		return ""
-	}
-	if s, ok := v.(string); ok {
+	if s, ok := p[key].(string); ok {
 		return s
 	}
-	return fmt.Sprintf("%v", v)
+	if v, ok := p[key]; ok {
+		return fmt.Sprintf("%v", v)
+	}
+	return ""
 }
 
 func paramStrSlice(p map[string]interface{}, key string) []string {
-	v, ok := p[key]
-	if !ok {
-		return nil
-	}
-	switch val := v.(type) {
+	switch val := p[key].(type) {
 	case []interface{}:
 		out := make([]string, 0, len(val))
 		for _, item := range val {
@@ -309,18 +304,18 @@ func (e *Evaluator) resolveFeatureID(p map[string]interface{}) string {
 
 func formatContext(ctx *memory.Context) string {
 	var b strings.Builder
-	if ctx.Feature != nil {
-		fmt.Fprintf(&b, "%s [%s]", ctx.Feature.Name, ctx.Feature.Status)
-		if ctx.Feature.Description != "" {
-			fmt.Fprintf(&b, " %s", ctx.Feature.Description)
+	if f := ctx.Feature; f != nil {
+		fmt.Fprintf(&b, "%s [%s]", f.Name, f.Status)
+		if f.Description != "" {
+			fmt.Fprintf(&b, " %s", f.Description)
 		}
 		b.WriteByte('\n')
 	}
 	if ctx.Summary != "" {
 		fmt.Fprintf(&b, "Summary: %s\n", ctx.Summary)
 	}
-	if ctx.Plan != nil {
-		fmt.Fprintf(&b, "Plan: %s %d/%d\n", ctx.Plan.Title, ctx.Plan.CompletedStep, ctx.Plan.TotalSteps)
+	if p := ctx.Plan; p != nil {
+		fmt.Fprintf(&b, "Plan: %s %d/%d\n", p.Title, p.CompletedStep, p.TotalSteps)
 	}
 	if len(ctx.ActiveFacts) > 0 {
 		b.WriteString("Facts:")

@@ -112,10 +112,10 @@ func percentile(sorted []int64, p int) int64 {
 // PrintMarkdown formats the report as a Markdown string.
 func (r Report) PrintMarkdown() string {
 	var b strings.Builder
-	b.WriteString("# devmem Benchmark Report\n\n## Overall\n| Metric | Value |\n|--------|-------|\n")
-	fmt.Fprintf(&b, "| Scenarios | %d |\n| Passed | %d |\n", r.TotalScenarios, r.TotalPassed)
-	fmt.Fprintf(&b, "| Overall Score | %.1f%% |\n| Accuracy | %.1f%% |\n", r.OverallScore, r.OverallAccuracy)
-	fmt.Fprintf(&b, "| Avg Latency | %dms |\n| P95 Latency | %dms |\n\n", r.AvgLatencyMs, r.P95LatencyMs)
+	fmt.Fprintf(&b, "# devmem Benchmark Report\n\n## Overall\n| Metric | Value |\n|--------|-------|\n"+
+		"| Scenarios | %d |\n| Passed | %d |\n| Overall Score | %.1f%% |\n| Accuracy | %.1f%% |\n"+
+		"| Avg Latency | %dms |\n| P95 Latency | %dms |\n\n",
+		r.TotalScenarios, r.TotalPassed, r.OverallScore, r.OverallAccuracy, r.AvgLatencyMs, r.P95LatencyMs)
 	b.WriteString("## Ability Breakdown\n| Ability | Score | Accuracy | Scenarios |\n|---------|-------|----------|----------|\n")
 	abilities := make([]string, 0, len(r.AbilityScores))
 	for a := range r.AbilityScores {
