@@ -11,28 +11,18 @@ import (
 )
 
 type SearchResult struct {
-	ID          string
-	Type        string
-	Content     string
-	FeatureName string
-	Relevance   float64
-	CreatedAt   string
+	ID, Type, Content, FeatureName, CreatedAt string
+	Relevance                                 float64
 }
 
-type Engine struct {
-	db *storage.DB
-}
+type Engine struct{ db *storage.DB }
 
-func NewEngine(db *storage.DB) *Engine {
-	return &Engine{db: db}
-}
+func NewEngine(db *storage.DB) *Engine { return &Engine{db: db} }
 
 type LinkedMemory struct {
-	ID           string
-	Type         string
-	Relationship string
-	Strength     float64
-	Depth        int
+	ID, Type, Relationship string
+	Strength               float64
+	Depth                  int
 }
 
 type ftsTable struct {
@@ -42,32 +32,10 @@ type ftsTable struct {
 }
 
 var ftsTables = []ftsTable{
-	{
-		typeName: "notes", resultType: "note",
-		ftsName: "notes_fts", sourceTable: "notes", alias: "n",
-		contentExpr: "n.content", typeExpr: "n.type",
-		timeCol: "n.created_at", featureCol: "n.feature_id", sourceType: "note",
-		trigramName: "notes_trigram",
-	},
-	{
-		typeName: "commits", resultType: "commit",
-		ftsName: "commits_fts", sourceTable: "commits", alias: "c",
-		contentExpr: "c.message", typeExpr: "c.intent_type",
-		timeCol: "c.committed_at", featureCol: "c.feature_id", sourceType: "commit",
-		trigramName: "commits_trigram",
-	},
-	{
-		typeName: "facts", resultType: "fact",
-		ftsName: "facts_fts", sourceTable: "facts", alias: "fa",
-		contentExpr: "fa.subject || ' ' || fa.predicate || ' ' || fa.object", typeExpr: "'fact'",
-		timeCol: "fa.valid_at", featureCol: "fa.feature_id", sourceType: "fact",
-	},
-	{
-		typeName: "plans", resultType: "plan",
-		ftsName: "plans_fts", sourceTable: "plans", alias: "p",
-		contentExpr: "p.title || ': ' || p.content", typeExpr: "'plan'",
-		timeCol: "p.created_at", featureCol: "p.feature_id", sourceType: "plan",
-	},
+	{"notes", "note", "notes_fts", "notes", "n", "n.content", "n.type", "n.created_at", "n.feature_id", "note", "notes_trigram"},
+	{"commits", "commit", "commits_fts", "commits", "c", "c.message", "c.intent_type", "c.committed_at", "c.feature_id", "commit", "commits_trigram"},
+	{"facts", "fact", "facts_fts", "facts", "fa", "fa.subject || ' ' || fa.predicate || ' ' || fa.object", "'fact'", "fa.valid_at", "fa.feature_id", "fact", ""},
+	{"plans", "plan", "plans_fts", "plans", "p", "p.title || ': ' || p.content", "'plan'", "p.created_at", "p.feature_id", "plan", ""},
 }
 
 var ftsTableMap = func() map[string]*ftsTable {
@@ -78,14 +46,7 @@ var ftsTableMap = func() map[string]*ftsTable {
 	return m
 }()
 
-var typeWeights = map[string]float64{
-	"decision":  2.0,
-	"blocker":   1.5,
-	"progress":  1.0,
-	"feature":   1.2,
-	"note":      0.5,
-	"next_step": 1.0,
-}
+var typeWeights = map[string]float64{"decision": 2.0, "blocker": 1.5, "progress": 1.0, "feature": 1.2, "note": 0.5, "next_step": 1.0}
 
 func (e *Engine) Search(query, scope string, types []string, featureID string, limit int) ([]SearchResult, error) {
 	if limit <= 0 {
@@ -94,17 +55,12 @@ func (e *Engine) Search(query, scope string, types []string, featureID string, l
 	if len(types) == 0 {
 		types = []string{"notes", "commits", "facts", "plans"}
 	}
-
-	ftsQuery := sanitizeFTSQuery(query)
-	results, err := e.searchLayer(ftsQuery, scope, types, featureID, limit, false)
-	if err != nil {
+	if results, err := e.searchLayer(sanitizeFTSQuery(query), scope, types, featureID, limit, false); err != nil {
 		return nil, fmt.Errorf("fts search: %w", err)
-	}
-	if len(results) > 0 {
+	} else if len(results) > 0 {
 		return results, nil
 	}
-
-	results, err = e.searchLayer(query, scope, types, featureID, limit, true)
+	results, err := e.searchLayer(query, scope, types, featureID, limit, true)
 	if err != nil {
 		return nil, fmt.Errorf("trigram search: %w", err)
 	}
@@ -114,8 +70,7 @@ func (e *Engine) Search(query, scope string, types []string, featureID string, l
 func sanitizeFTSQuery(query string) string {
 	tokens := strings.Fields(query)
 	for i, t := range tokens {
-		t = strings.ReplaceAll(t, "\"", "")
-		if t != "" {
+		if t = strings.ReplaceAll(t, "\"", ""); t != "" {
 			tokens[i] = "\"" + t + "\""
 		}
 	}
@@ -123,21 +78,18 @@ func sanitizeFTSQuery(query string) string {
 }
 
 func (e *Engine) searchLayer(matchQuery, scope string, types []string, featureID string, limit int, trigram bool) ([]SearchResult, error) {
-	reader := e.db.Reader()
 	var allResults []SearchResult
-
 	for _, typ := range types {
 		tbl, ok := ftsTableMap[typ]
 		if !ok {
 			continue
 		}
-		results, err := e.searchTable(reader, tbl, matchQuery, scope, featureID, trigram)
+		results, err := e.searchTable(e.db.Reader(), tbl, matchQuery, scope, featureID, trigram)
 		if err != nil {
 			return nil, err
 		}
 		allResults = append(allResults, results...)
 	}
-
 	sortByRelevance(allResults)
 	if len(allResults) > limit {
 		allResults = allResults[:limit]
@@ -157,7 +109,6 @@ func (e *Engine) searchTable(reader *sql.DB, tbl *ftsTable, matchQuery, scope, f
 	if !trigram {
 		rankCol = fmt.Sprintf(",\n       bm25(%s) as rank", vtable)
 	}
-
 	q := fmt.Sprintf(`
 SELECT %s.id, %s as content, %s as subtype, %s, COALESCE(f.name, '') as feature_name%s,
        (SELECT COUNT(*) FROM memory_links WHERE source_id = %s.id AND source_type = '%s') as link_count
@@ -166,32 +117,26 @@ JOIN %s %s ON %s.rowid = %s.rowid
 LEFT JOIN features f ON %s.feature_id = f.id
 WHERE %s MATCH ?`,
 		tbl.alias, tbl.contentExpr, tbl.typeExpr, tbl.timeCol, rankCol,
-		tbl.alias, tbl.sourceType,
-		vtable,
-		tbl.sourceTable, tbl.alias, vtable, tbl.alias,
-		tbl.alias,
-		vtable,
-	)
-
+		tbl.alias, tbl.sourceType, vtable,
+		tbl.sourceTable, tbl.alias, vtable, tbl.alias, tbl.alias, vtable)
 	args := []interface{}{matchQuery}
 	if scope == "current_feature" && featureID != "" {
 		q += fmt.Sprintf(" AND %s = ?", tbl.featureCol)
 		args = append(args, featureID)
 	}
-
 	rows, err := reader.Query(q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("search %s %s: %w", tbl.typeName, vtable, err)
 	}
 	defer rows.Close()
-
 	var results []SearchResult
 	for rows.Next() {
-		var r SearchResult
-		var subtype string
-		var linkCount int
-		var rank float64
-
+		var (
+			r         SearchResult
+			subtype   string
+			linkCount int
+			rank      float64
+		)
 		if trigram {
 			if err := rows.Scan(&r.ID, &r.Content, &subtype, &r.CreatedAt, &r.FeatureName, &linkCount); err != nil {
 				return nil, fmt.Errorf("scan %s %s: %w", tbl.typeName, vtable, err)
@@ -203,7 +148,6 @@ WHERE %s MATCH ?`,
 			}
 			rank = math.Abs(rank)
 		}
-
 		r.Type = tbl.resultType
 		r.Relevance = Score(rank, r.CreatedAt, subtype, linkCount)
 		results = append(results, r)
@@ -223,29 +167,21 @@ func (e *Engine) TraverseLinks(memoryID, memoryType string, maxDepth int) ([]Lin
 	if maxDepth < 1 {
 		maxDepth = 1
 	}
-
-	const query = `
+	rows, err := e.db.Reader().Query(`
 WITH RECURSIVE connected AS (
     SELECT target_id, target_type, relationship, strength, 1 as depth
-    FROM memory_links
-    WHERE source_id = ? AND source_type = ?
+    FROM memory_links WHERE source_id = ? AND source_type = ?
     UNION ALL
     SELECT ml.target_id, ml.target_type, ml.relationship, ml.strength, c.depth + 1
-    FROM memory_links ml
-    JOIN connected c ON ml.source_id = c.target_id AND ml.source_type = c.target_type
+    FROM memory_links ml JOIN connected c ON ml.source_id = c.target_id AND ml.source_type = c.target_type
     WHERE c.depth < ?
 )
 SELECT DISTINCT target_id, target_type, relationship, strength, depth
-FROM connected
-ORDER BY depth, strength DESC
-`
-
-	rows, err := e.db.Reader().Query(query, memoryID, memoryType, maxDepth)
+FROM connected ORDER BY depth, strength DESC`, memoryID, memoryType, maxDepth)
 	if err != nil {
 		return nil, fmt.Errorf("traverse links: %w", err)
 	}
 	defer rows.Close()
-
 	var results []LinkedMemory
 	for rows.Next() {
 		var lm LinkedMemory
@@ -257,11 +193,8 @@ ORDER BY depth, strength DESC
 	return results, rows.Err()
 }
 
-func Score(bm25Score float64, createdAt string, noteType string, linkCount int) float64 {
-	decay := temporalDecay(createdAt)
-	weight := typeWeight(noteType)
-	boost := linkBoost(linkCount)
-	return bm25Score * decay * weight * boost
+func Score(bm25Score float64, createdAt, noteType string, linkCount int) float64 {
+	return bm25Score * temporalDecay(createdAt) * typeWeight(noteType) * (1.0 + float64(linkCount)*0.1)
 }
 
 func temporalDecay(createdAt string) float64 {
@@ -283,8 +216,4 @@ func typeWeight(noteType string) float64 {
 		return w
 	}
 	return 1.0
-}
-
-func linkBoost(linkCount int) float64 {
-	return 1.0 + float64(linkCount)*0.1
 }

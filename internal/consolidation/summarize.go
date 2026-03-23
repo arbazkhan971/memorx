@@ -9,18 +9,12 @@ import (
 	"github.com/google/uuid"
 )
 
-type noteRecord struct {
-	id, content, noteType, createdAt string
-}
-
-type summaryRecord struct {
-	id, content, coversFrom, coversTo string
-}
+type noteRecord struct{ id, content, noteType, createdAt string }
+type summaryRecord struct{ id, content, coversFrom, coversTo string }
 
 func (e *Engine) GenerateSummaries(featureID string) (int, error) {
 	summariesCreated := 0
 	scope := "feature:" + featureID
-
 	unsummarized, err := e.getUnsummarizedNotes(featureID)
 	if err != nil {
 		return 0, err
@@ -36,7 +30,6 @@ func (e *Engine) GenerateSummaries(featureID string) (int, error) {
 		}
 		summariesCreated++
 	}
-
 	gen0Summaries, err := e.getSummariesByGeneration(scope, 0)
 	if err != nil {
 		return summariesCreated, err
@@ -67,8 +60,7 @@ func (e *Engine) getUnsummarizedNotes(featureID string) ([]noteRecord, error) {
 		`SELECT n.id, n.content, n.type, n.created_at FROM notes n
 		 WHERE n.feature_id=? AND NOT EXISTS (
 			SELECT 1 FROM summaries s WHERE s.scope='feature:'||n.feature_id AND s.covers_from<=n.created_at AND s.covers_to>=n.created_at
-		 ) ORDER BY n.created_at DESC`, featureID,
-	)
+		 ) ORDER BY n.created_at DESC`, featureID)
 	if err != nil {
 		return nil, fmt.Errorf("query unsummarized notes: %w", err)
 	}
@@ -86,9 +78,7 @@ func (e *Engine) getUnsummarizedNotes(featureID string) ([]noteRecord, error) {
 
 func (e *Engine) getSummariesByGeneration(scope string, generation int) ([]summaryRecord, error) {
 	rows, err := e.db.Reader().Query(
-		`SELECT id, content, covers_from, covers_to FROM summaries WHERE scope=? AND generation=? ORDER BY covers_from ASC`,
-		scope, generation,
-	)
+		`SELECT id, content, covers_from, covers_to FROM summaries WHERE scope=? AND generation=? ORDER BY covers_from ASC`, scope, generation)
 	if err != nil {
 		return nil, fmt.Errorf("query summaries: %w", err)
 	}
@@ -107,8 +97,7 @@ func (e *Engine) getSummariesByGeneration(scope string, generation int) ([]summa
 func (e *Engine) insertSummary(scope, content string, generation int, coversFrom, coversTo string) error {
 	_, err := e.db.Writer().Exec(
 		`INSERT INTO summaries (id, scope, content, generation, token_count, covers_from, covers_to, created_at) VALUES (?,?,?,?,?,?,?,?)`,
-		uuid.New().String(), scope, content, generation, len(content)/4, coversFrom, coversTo, time.Now().UTC().Format(time.DateTime),
-	)
+		uuid.New().String(), scope, content, generation, len(content)/4, coversFrom, coversTo, time.Now().UTC().Format(time.DateTime))
 	return err
 }
 
