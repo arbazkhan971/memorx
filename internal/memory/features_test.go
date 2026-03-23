@@ -367,6 +367,28 @@ func TestStartFeature_PausesCurrentActive(t *testing.T) {
 	}
 }
 
+func TestCreateFeature_HasNonEmptyID(t *testing.T) {
+	store := newTestStore(t)
+	f, err := store.CreateFeature("id-test", "Testing ID generation")
+	if err != nil {
+		t.Fatalf("CreateFeature: %v", err)
+	}
+	if len(f.ID) < 10 {
+		t.Errorf("expected UUID-like ID with len >= 10, got %q (len %d)", f.ID, len(f.ID))
+	}
+}
+
+func TestListFeatures_EmptyDB(t *testing.T) {
+	store := newTestStore(t)
+	features, err := store.ListFeatures("all")
+	if err != nil {
+		t.Fatalf("ListFeatures: %v", err)
+	}
+	if len(features) != 0 {
+		t.Errorf("expected 0 features on empty DB, got %d", len(features))
+	}
+}
+
 func TestStartFeature_Resume(t *testing.T) {
 	store := newTestStore(t)
 

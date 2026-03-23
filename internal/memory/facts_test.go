@@ -156,6 +156,18 @@ func TestCreateFact_IdenticalReturnsExistingNoDuplicate(t *testing.T) {
 	}
 }
 
+func TestGetActiveFacts_NonExistentFeature(t *testing.T) {
+	store := newTestStore(t)
+
+	facts, err := store.GetActiveFacts("nonexistent-feature-id")
+	if err != nil {
+		t.Fatalf("GetActiveFacts: %v", err)
+	}
+	if len(facts) != 0 {
+		t.Errorf("expected 0 active facts for non-existent feature, got %d", len(facts))
+	}
+}
+
 func TestGetActiveFacts(t *testing.T) {
 	store := newTestStore(t)
 

@@ -2,6 +2,7 @@ package consolidation_test
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -221,6 +222,57 @@ func TestGenerateSummaries_CreatesGen1WhenEnoughGen0(t *testing.T) {
 	}
 	if coversFrom > coversTo {
 		t.Errorf("gen-1 covers_from (%s) > covers_to (%s)", coversFrom, coversTo)
+	}
+}
+
+func TestGenerateSummaries_ContentIncludesNoteTypes(t *testing.T) {
+	db := newTestDB(t)
+	engine := consolidation.NewEngine(db, consolidation.DefaultConfig())
+
+	featureID := uuid.New().String()
+	_, err := db.Writer().Exec(
+		`INSERT INTO features (id, name, description) VALUES (?, ?, ?)`,
+		featureID, "test-content-types", "test",
+	)
+	if err != nil {
+		t.Fatalf("create feature: %v", err)
+	}
+
+	// Create notes of different types
+	for i := 0; i < 8; i++ {
+		insertTestNote(t, db, featureID, fmt.Sprintf("decision note %d about architecture", i), "decision")
+	}
+	for i := 0; i < 7; i++ {
+		insertTestNote(t, db, featureID, fmt.Sprintf("blocker note %d about infrastructure", i), "blocker")
+	}
+	for i := 0; i < 7; i++ {
+		insertTestNote(t, db, featureID, fmt.Sprintf("progress note %d about development", i), "progress")
+	}
+
+	count, err := engine.GenerateSummaries(featureID)
+	if err != nil {
+		t.Fatalf("GenerateSummaries: %v", err)
+	}
+	if count < 1 {
+		t.Fatalf("expected at least 1 summary, got %d", count)
+	}
+
+	// Read the summary content
+	var content string
+	err = db.Reader().QueryRow(
+		`SELECT content FROM summaries WHERE scope = ? AND generation = 0 LIMIT 1`,
+		"feature:"+featureID,
+	).Scan(&content)
+	if err != nil {
+		t.Fatalf("read summary: %v", err)
+	}
+
+	// Content should include note type headers
+	if !strings.Contains(content, "[DECISION]") {
+		t.Error("expected summary to contain [DECISION] section")
+	}
+	if !strings.Contains(content, "[BLOCKER]") {
+		t.Error("expected summary to contain [BLOCKER] section")
 	}
 }
 

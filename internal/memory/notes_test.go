@@ -217,6 +217,24 @@ func TestListNotes_LimitOne(t *testing.T) {
 	}
 }
 
+func TestCreateNote_EachNoteType(t *testing.T) {
+	store := newTestStore(t)
+	f, _ := store.CreateFeature("feat-types", "Note types test")
+
+	types := []string{"progress", "decision", "blocker", "next_step", "note"}
+	for _, noteType := range types {
+		t.Run(noteType, func(t *testing.T) {
+			note, err := store.CreateNote(f.ID, "", "Content for "+noteType, noteType)
+			if err != nil {
+				t.Fatalf("CreateNote(%s): %v", noteType, err)
+			}
+			if note.Type != noteType {
+				t.Errorf("expected type %q, got %q", noteType, note.Type)
+			}
+		})
+	}
+}
+
 func TestListNotes_OrderNewestFirst(t *testing.T) {
 	store := newTestStore(t)
 

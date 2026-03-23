@@ -708,6 +708,57 @@ func TestScoringZeroLinksVsManyLinks(t *testing.T) {
 
 // ---------- Search with special characters in query ----------
 
+func TestScoreWithNegativeBM25(t *testing.T) {
+	// BM25 values from SQLite are negative; Score expects positive.
+	// But if someone passes a negative value, the function should still work.
+	ts := now()
+	score := search.Score(-2.0, ts, "note", 0)
+	// Negative bm25 * positive factors = negative score
+	if score >= 0 {
+		t.Errorf("negative BM25 should produce negative score, got %f", score)
+	}
+}
+
+func TestScoreWithVeryOldDate(t *testing.T) {
+	// 365 days ago - very high decay
+	oldDate := daysAgo(365)
+	score := search.Score(1.0, oldDate, "note", 0)
+	// At 365 days, decay should be very small
+	if score > 0.01 {
+		t.Errorf("expected very small score for 365-day-old item, got %f", score)
+	}
+}
+
+func TestScoreWithInvalidDate(t *testing.T) {
+	// Invalid date should default to decay=1.0
+	score := search.Score(1.0, "not-a-date", "note", 0)
+	// typeWeight("note") = 0.5, linkBoost(0) = 1.0, decay = 1.0
+	expected := 1.0 * 1.0 * 0.5 * 1.0
+	if math.Abs(score-expected) > 0.05 {
+		t.Errorf("expected score ~%.2f for invalid date, got %f", expected, score)
+	}
+}
+
+func TestSearchWithLimitOne(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	insertFeature(t, db, "f1", "test-feature")
+	for i := 0; i < 5; i++ {
+		insertNote(t, db, fmt.Sprintf("n%d", i), "f1",
+			fmt.Sprintf("Database optimization technique %d", i), "progress", now())
+	}
+
+	engine := search.NewEngine(db)
+	results, err := engine.Search("database", "all_features", []string{"notes"}, "", 1)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(results) != 1 {
+		t.Errorf("expected exactly 1 result with limit=1, got %d", len(results))
+	}
+}
+
 func TestSearchSpecialCharactersInQuery(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()

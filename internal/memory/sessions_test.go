@@ -2,6 +2,7 @@ package memory_test
 
 import (
 	"testing"
+	"time"
 )
 
 func TestCreateSession(t *testing.T) {
@@ -179,6 +180,33 @@ func TestListSessions_Limit(t *testing.T) {
 	}
 	if len(sessions) != 2 {
 		t.Fatalf("expected 2 sessions (limited), got %d", len(sessions))
+	}
+}
+
+func TestListSessions_OrderNewestFirst(t *testing.T) {
+	store := newTestStore(t)
+	f, _ := store.CreateFeature("feat-order", "Order test")
+
+	// Create sessions with 1.1s gaps to ensure different started_at values
+	s1, _ := store.CreateSession(f.ID, "tool-first")
+	time.Sleep(1100 * time.Millisecond)
+	_, _ = store.CreateSession(f.ID, "tool-second")
+	time.Sleep(1100 * time.Millisecond)
+	s3, _ := store.CreateSession(f.ID, "tool-third")
+
+	sessions, err := store.ListSessions(f.ID, 10)
+	if err != nil {
+		t.Fatalf("ListSessions: %v", err)
+	}
+	if len(sessions) != 3 {
+		t.Fatalf("expected 3 sessions, got %d", len(sessions))
+	}
+	// Newest first (ORDER BY started_at DESC)
+	if sessions[0].ID != s3.ID {
+		t.Errorf("expected newest session first, got %q", sessions[0].Tool)
+	}
+	if sessions[2].ID != s1.ID {
+		t.Errorf("expected oldest session last, got %q", sessions[2].Tool)
 	}
 }
 

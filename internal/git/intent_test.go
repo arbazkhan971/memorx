@@ -353,6 +353,40 @@ func TestClassifyIntent_WhitespaceOnly(t *testing.T) {
 	}
 }
 
+func TestClassifyIntent_ConfidenceLevelsCorrect(t *testing.T) {
+	// Conventional prefix should always be 0.9
+	_, conf := git.ClassifyIntent("feat: something", nil)
+	if conf != 0.9 {
+		t.Errorf("conventional prefix confidence should be 0.9, got %f", conf)
+	}
+
+	// Keyword match should always be 0.8
+	_, conf = git.ClassifyIntent("Add new feature", nil)
+	if conf != 0.8 {
+		t.Errorf("keyword confidence should be 0.8, got %f", conf)
+	}
+
+	// File signal should always be 0.6
+	_, conf = git.ClassifyIntent("changes", []string{"test_helper_test.go"})
+	if conf != 0.6 {
+		t.Errorf("file signal confidence should be 0.6, got %f", conf)
+	}
+
+	// No match should be 0.0
+	_, conf = git.ClassifyIntent("v1.0.0", nil)
+	if conf != 0.0 {
+		t.Errorf("no match confidence should be 0.0, got %f", conf)
+	}
+}
+
+func TestClassifyIntent_AllFileTypes_NoFiles(t *testing.T) {
+	// Empty files list should not match any file signal
+	intentType, _ := git.ClassifyIntent("changes", []string{})
+	if intentType != "unknown" {
+		t.Errorf("expected unknown for empty files, got %s", intentType)
+	}
+}
+
 func TestClassifyIntent_MultipleKeywords_FirstMatchWins(t *testing.T) {
 	// The tokenizer splits the message into words and iterates over them in order.
 	// The first matching keyword determines the intent type.
