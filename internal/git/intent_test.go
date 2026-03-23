@@ -410,6 +410,31 @@ func TestClassifyIntent_ConfidenceTiers(t *testing.T) {
 	}
 }
 
+func TestClassifyIntent_AllCategories(t *testing.T) {
+	tests := []struct {
+		message  string
+		files    []string
+		wantType string
+	}{
+		{"feat: add API", nil, "feature"},
+		{"fix: null pointer", nil, "bugfix"},
+		{"docs: update readme", nil, "docs"},
+		{"test: add coverage", nil, "test"},
+		{"refactor: extract method", nil, "refactor"},
+		{"chore: update deps", nil, "cleanup"},
+		{"ci: add pipeline", nil, "infra"},
+		{"v2.0.0-rc1", nil, "unknown"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.wantType, func(t *testing.T) {
+			got, _ := git.ClassifyIntent(tc.message, tc.files)
+			if got != tc.wantType {
+				t.Errorf("ClassifyIntent(%q) = %s, want %s", tc.message, got, tc.wantType)
+			}
+		})
+	}
+}
+
 func TestClassifyIntent_MultipleKeywords_FirstMatchWins(t *testing.T) {
 	// The tokenizer splits the message into words and iterates over them in order.
 	// The first matching keyword determines the intent type.

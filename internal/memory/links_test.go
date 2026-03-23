@@ -141,6 +141,25 @@ func TestCreateLink_AllRelationshipTypes(t *testing.T) {
 	}
 }
 
+func TestCreateLink_EachRelationshipType(t *testing.T) {
+	rels := []string{"related", "extends", "implements", "contradicts", "caused_by", "blocks", "supersedes", "resolves"}
+	for _, rel := range rels {
+		t.Run(rel, func(t *testing.T) {
+			store := newTestStore(t)
+			f, _ := store.CreateFeature("rel-"+rel, "")
+			n1, _ := store.CreateNote(f.ID, "", "src", "note")
+			n2, _ := store.CreateNote(f.ID, "", "tgt", "note")
+			if err := store.CreateLink(n1.ID, "note", n2.ID, "note", rel, 0.5); err != nil {
+				t.Fatalf("CreateLink(%s): %v", rel, err)
+			}
+			links, _ := store.GetLinks(n1.ID, "note")
+			if len(links) != 1 || links[0].Relationship != rel {
+				t.Errorf("expected 1 link with rel %q, got %d links", rel, len(links))
+			}
+		})
+	}
+}
+
 func TestAutoLink_ReturnsZeroForVeryShortContent(t *testing.T) {
 	store := newTestStore(t)
 	f, _ := store.CreateFeature("feat-short", "Short content test")

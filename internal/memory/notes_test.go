@@ -278,6 +278,26 @@ func TestListNotes_FilterProgress(t *testing.T) {
 	}
 }
 
+func TestCreateNote_AllTypes(t *testing.T) {
+	store := newTestStore(t)
+	f, _ := store.CreateFeature("all-types", "All types")
+	types := []struct{ name, want string }{
+		{"progress", "progress"}, {"decision", "decision"}, {"blocker", "blocker"},
+		{"next_step", "next_step"}, {"note", "note"},
+	}
+	for _, tc := range types {
+		t.Run(tc.name, func(t *testing.T) {
+			n, err := store.CreateNote(f.ID, "", "content", tc.name)
+			if err != nil {
+				t.Fatalf("CreateNote(%s): %v", tc.name, err)
+			}
+			if n.Type != tc.want {
+				t.Errorf("got type %q, want %q", n.Type, tc.want)
+			}
+		})
+	}
+}
+
 func TestListNotes_OrderNewestFirst(t *testing.T) {
 	store := newTestStore(t)
 

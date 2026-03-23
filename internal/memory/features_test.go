@@ -402,6 +402,59 @@ func TestStartFeature_EmptyNameCreatesFeature(t *testing.T) {
 	}
 }
 
+func TestStartFeature_MultipleSwitches(t *testing.T) {
+	store := newTestStore(t)
+	names := []string{"sw-1", "sw-2", "sw-3", "sw-4", "sw-5"}
+	for _, n := range names {
+		t.Run("create_"+n, func(t *testing.T) {
+			_, err := store.StartFeature(n, "desc")
+			if err != nil {
+				t.Fatalf("StartFeature(%s): %v", n, err)
+			}
+		})
+	}
+	// Only last should be active
+	active, err := store.GetActiveFeature()
+	if err != nil {
+		t.Fatalf("GetActiveFeature: %v", err)
+	}
+	if active.Name != "sw-5" {
+		t.Errorf("expected sw-5 active, got %q", active.Name)
+	}
+	for _, n := range names[:4] {
+		t.Run("paused_"+n, func(t *testing.T) {
+			f, _ := store.GetFeature(n)
+			if f.Status != "paused" {
+				t.Errorf("expected %s paused, got %q", n, f.Status)
+			}
+		})
+	}
+}
+
+func TestGetActiveFacts_EmptyFeature(t *testing.T) {
+	store := newTestStore(t)
+	f, _ := store.CreateFeature("empty-facts", "No facts")
+	facts, err := store.GetActiveFacts(f.ID)
+	if err != nil {
+		t.Fatalf("GetActiveFacts: %v", err)
+	}
+	if len(facts) != 0 {
+		t.Errorf("expected 0 facts, got %d", len(facts))
+	}
+}
+
+func TestListSessions_EmptyFeature(t *testing.T) {
+	store := newTestStore(t)
+	f, _ := store.CreateFeature("empty-sess", "No sessions")
+	sessions, err := store.ListSessions(f.ID, 10)
+	if err != nil {
+		t.Fatalf("ListSessions: %v", err)
+	}
+	if len(sessions) != 0 {
+		t.Errorf("expected 0 sessions, got %d", len(sessions))
+	}
+}
+
 func TestStartFeature_Resume(t *testing.T) {
 	store := newTestStore(t)
 

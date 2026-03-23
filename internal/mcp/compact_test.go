@@ -4,6 +4,8 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	mcplib "github.com/mark3labs/mcp-go/mcp"
 )
 
 // These tests enforce token efficiency by setting maximum character limits
@@ -328,6 +330,51 @@ func TestResponseCompactness_Analytics(t *testing.T) {
 
 	if len(text) > 800 {
 		t.Errorf("analytics (feature) response too verbose: %d chars (max 800)\n%s", len(text), text)
+	}
+}
+
+func TestResponseCompactness_PopulatedData(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	ctx := context.Background()
+	_, err := srv.handleStartFeature(ctx, newReq("devmem_start_feature", map[string]interface{}{
+		"name": "populated-compact", "description": "populated compactness test",
+	}))
+	if err != nil {
+		t.Fatalf("handleStartFeature: %v", err)
+	}
+	types := []string{"note", "decision", "blocker", "progress"}
+	for i, tp := range types {
+		_, err = srv.handleRemember(ctx, newReq("devmem_remember", map[string]interface{}{
+			"content": "Item " + tp + " content for populated test",
+			"type":    tp,
+		}))
+		if err != nil {
+			t.Fatalf("handleRemember[%d]: %v", i, err)
+		}
+	}
+	tests := []struct {
+		name string
+		fn   func() (*mcplib.CallToolResult, error)
+		max  int
+	}{
+		{"status", func() (*mcplib.CallToolResult, error) { return srv.handleStatus(ctx, newReq("devmem_status", nil)) }, 600},
+		{"briefing", func() (*mcplib.CallToolResult, error) { return srv.handleBriefing(ctx, newReq("devmem_briefing", nil)) }, 400},
+		{"context_compact", func() (*mcplib.CallToolResult, error) {
+			return srv.handleGetContext(ctx, newReq("devmem_get_context", map[string]interface{}{"tier": "compact"}))
+		}, 600},
+		{"health", func() (*mcplib.CallToolResult, error) { return srv.handleHealth(ctx, newReq("devmem_health", nil)) }, 600},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			res, err := tc.fn()
+			if err != nil {
+				t.Fatalf("handler error: %v", err)
+			}
+			text := resultText(t, res)
+			if len(text) > tc.max {
+				t.Errorf("%s too verbose with populated data: %d chars (max %d)", tc.name, len(text), tc.max)
+			}
+		})
 	}
 }
 

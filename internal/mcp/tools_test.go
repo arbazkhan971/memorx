@@ -1013,3 +1013,37 @@ func TestHandleEndSession_SummaryAppearsInContext(t *testing.T) {
 		t.Errorf("context should contain the session summary text, got:\n%s", text)
 	}
 }
+
+func TestHandlerErrors_RequiresActiveFeature(t *testing.T) {
+	handlers := []struct {
+		name string
+		req  map[string]interface{}
+		fn   func(*DevMemServer, context.Context, map[string]interface{}) (*mcplib.CallToolResult, error)
+	}{
+		{"sync", nil, func(s *DevMemServer, ctx context.Context, _ map[string]interface{}) (*mcplib.CallToolResult, error) {
+			return s.handleSync(ctx, newReq("devmem_sync", nil))
+		}},
+		{"remember", map[string]interface{}{"content": "x"}, func(s *DevMemServer, ctx context.Context, args map[string]interface{}) (*mcplib.CallToolResult, error) {
+			return s.handleRemember(ctx, newReq("devmem_remember", args))
+		}},
+		{"search", map[string]interface{}{"query": "test"}, func(s *DevMemServer, ctx context.Context, args map[string]interface{}) (*mcplib.CallToolResult, error) {
+			return s.handleSearch(ctx, newReq("devmem_search", args))
+		}},
+		{"save_plan", map[string]interface{}{"title": "t", "steps": []interface{}{map[string]interface{}{"title": "s1"}}}, func(s *DevMemServer, ctx context.Context, args map[string]interface{}) (*mcplib.CallToolResult, error) {
+			return s.handleSavePlan(ctx, newReq("devmem_save_plan", args))
+		}},
+	}
+	for _, tc := range handlers {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, _ := setupTestServer(t)
+			res, err := tc.fn(srv, context.Background(), tc.req)
+			if err != nil {
+				t.Fatalf("handler error: %v", err)
+			}
+			text := resultText(t, res)
+			if !strings.Contains(strings.ToLower(text), "no active feature") && !strings.Contains(strings.ToLower(text), "feature") {
+				t.Errorf("expected error about no active feature, got: %s", text)
+			}
+		})
+	}
+}

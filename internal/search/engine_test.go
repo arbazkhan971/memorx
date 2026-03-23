@@ -826,6 +826,53 @@ func TestScore_AllZeroValues(t *testing.T) {
 	}
 }
 
+func TestScore_TypeWeights(t *testing.T) {
+	ts := now()
+	types := []struct {
+		name   string
+		weight float64
+	}{
+		{"decision", 2.0}, {"blocker", 1.5}, {"feature", 1.2},
+		{"progress", 1.0}, {"next_step", 1.0}, {"note", 0.5},
+	}
+	for _, tc := range types {
+		t.Run(tc.name, func(t *testing.T) {
+			score := search.Score(1.0, ts, tc.name, 0)
+			expected := tc.weight // bm25=1.0 * decay~1.0 * weight * linkBoost=1.0
+			if math.Abs(score-expected) > 0.05 {
+				t.Errorf("Score(1.0, now, %q, 0) = %f, want ~%f", tc.name, score, expected)
+			}
+		})
+	}
+}
+
+func TestSearch_QueryPatterns(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	insertFeature(t, db, "f1", "qp-feat")
+	insertNote(t, db, "n1", "f1", "Using PostgreSQL for relational data storage", "decision", now())
+	insertNote(t, db, "n2", "f1", "Redis caching layer for session tokens", "progress", now())
+	insertNote(t, db, "n3", "f1", "GraphQL API endpoint for user queries", "note", now())
+	engine := search.NewEngine(db)
+	patterns := []struct {
+		query   string
+		wantMin int
+	}{
+		{"PostgreSQL", 1}, {"caching session", 1}, {"API", 1},
+	}
+	for _, tc := range patterns {
+		t.Run(tc.query, func(t *testing.T) {
+			results, err := engine.Search(tc.query, "all_features", []string{"notes"}, "", 10)
+			if err != nil {
+				t.Fatalf("Search(%q): %v", tc.query, err)
+			}
+			if len(results) < tc.wantMin {
+				t.Errorf("Search(%q) got %d results, want >= %d", tc.query, len(results), tc.wantMin)
+			}
+		})
+	}
+}
+
 func TestSearchSpecialCharactersInQuery(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
