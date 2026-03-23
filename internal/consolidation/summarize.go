@@ -25,7 +25,6 @@ func (e *Engine) GenerateSummaries(featureID string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-
 	if len(unsummarized) >= e.cfg.MaxUnsummarized {
 		notes := unsummarized
 		if len(notes) > e.cfg.MaxUnsummarized {
@@ -42,7 +41,6 @@ func (e *Engine) GenerateSummaries(featureID string) (int, error) {
 	if err != nil {
 		return summariesCreated, err
 	}
-
 	if len(gen0Summaries) >= 5 {
 		toRoll := gen0Summaries[:5]
 		var parts []string
@@ -56,13 +54,11 @@ func (e *Engine) GenerateSummaries(featureID string) (int, error) {
 				allTo = s.coversTo
 			}
 		}
-		content := truncate(strings.Join(parts, "\n\n---\n\n"), 2000)
-		if err := e.insertSummary(scope, content, 1, allFrom, allTo); err != nil {
+		if err := e.insertSummary(scope, truncate(strings.Join(parts, "\n\n---\n\n"), 2000), 1, allFrom, allTo); err != nil {
 			return summariesCreated, fmt.Errorf("insert gen-1 summary: %w", err)
 		}
 		summariesCreated++
 	}
-
 	return summariesCreated, nil
 }
 
@@ -126,7 +122,6 @@ func buildSummaryContent(notes []noteRecord) string {
 		}
 		return sorted[i].createdAt < sorted[j].createdAt
 	})
-
 	var sections []string
 	currentType := ""
 	var currentNotes []string

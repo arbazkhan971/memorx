@@ -4,11 +4,16 @@ import (
 	"database/sql"
 	"fmt"
 	"math"
+	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/arbaz/devmem/internal/storage"
+	"github.com/google/uuid"
 )
+
+const conflictGroupsSQL = `SELECT COUNT(*) FROM (SELECT subject, predicate FROM facts WHERE invalid_at IS NULL GROUP BY subject, predicate HAVING COUNT(*)>1)`
 
 type ConsolidationState struct {
 	LastRunAt         string
@@ -58,7 +63,6 @@ func (e *Engine) Start() {
 	e.stopCh = make(chan struct{})
 	e.done = make(chan struct{})
 	e.running = true
-
 	go func() {
 		defer close(e.done)
 		ticker := time.NewTicker(e.cfg.IdleTimeout)
@@ -96,31 +100,29 @@ func (e *Engine) RunOnce() error {
 	if _, err = e.DiscoverLinks(); err != nil {
 		return fmt.Errorf("discover links: %w", err)
 	}
-
 	featureIDs, err := e.getFeatureIDs()
 	if err != nil {
 		return fmt.Errorf("get feature IDs: %w", err)
 	}
 	for _, fid := range featureIDs {
-		e.GenerateSummaries(fid) //nolint:errcheck // best-effort
+		e.GenerateSummaries(fid) //nolint:errcheck
 	}
-
 	entropy, err := e.calculateEntropy()
 	if err != nil {
 		return fmt.Errorf("calculate entropy: %w", err)
 	}
-	unsummarized, err := e.countUnsummarized()
+	unsummarized, err := e.queryCount(
+		`SELECT COUNT(*) FROM notes n WHERE NOT EXISTS (
+			SELECT 1 FROM summaries s WHERE s.scope='feature:'||n.feature_id AND s.covers_from<=n.created_at AND s.covers_to>=n.created_at)`)
 	if err != nil {
 		return fmt.Errorf("count unsummarized: %w", err)
 	}
-
 	now := time.Now().UTC().Format(time.DateTime)
 	nextTrigger := time.Now().UTC().Add(e.cfg.IdleTimeout).Format(time.DateTime)
-	_, err = e.db.Writer().Exec(
+	if _, err = e.db.Writer().Exec(
 		`UPDATE consolidation_state SET last_run_at=?, entropy_score=?, unsummarized_count=?, conflict_count=?, next_trigger_at=? WHERE id=1`,
 		now, entropy, unsummarized, invalidated, nextTrigger,
-	)
-	if err != nil {
+	); err != nil {
 		return fmt.Errorf("update consolidation state: %w", err)
 	}
 	return nil
@@ -141,11 +143,13 @@ func (e *Engine) GetState() (*ConsolidationState, error) {
 }
 
 func (e *Engine) calculateEntropy() (float64, error) {
-	unsummarized, err := e.countUnsummarized()
+	unsummarized, err := e.queryCount(
+		`SELECT COUNT(*) FROM notes n WHERE NOT EXISTS (
+			SELECT 1 FROM summaries s WHERE s.scope='feature:'||n.feature_id AND s.covers_from<=n.created_at AND s.covers_to>=n.created_at)`)
 	if err != nil {
 		return 0, err
 	}
-	conflicts, err := e.countConflicts()
+	conflicts, err := e.queryCount(conflictGroupsSQL)
 	if err != nil {
 		return 0, err
 	}
@@ -159,25 +163,10 @@ func (e *Engine) calculateEntropy() (float64, error) {
 		cap(hours, 24.0)*0.3, nil
 }
 
-func (e *Engine) countUnsummarized() (int, error) {
+func (e *Engine) queryCount(sql string, args ...any) (int, error) {
 	var count int
-	err := e.db.Reader().QueryRow(
-		`SELECT COUNT(*) FROM notes n WHERE NOT EXISTS (
-			SELECT 1 FROM summaries s WHERE s.scope='feature:'||n.feature_id AND s.covers_from<=n.created_at AND s.covers_to>=n.created_at)`,
-	).Scan(&count)
-	if err != nil {
-		return 0, fmt.Errorf("count unsummarized: %w", err)
-	}
-	return count, nil
-}
-
-func (e *Engine) countConflicts() (int, error) {
-	var count int
-	err := e.db.Reader().QueryRow(
-		conflictGroupsSQL,
-	).Scan(&count)
-	if err != nil {
-		return 0, fmt.Errorf("count conflicts: %w", err)
+	if err := e.db.Reader().QueryRow(sql, args...).Scan(&count); err != nil {
+		return 0, err
 	}
 	return count, nil
 }
@@ -213,13 +202,156 @@ func (e *Engine) getFeatureIDs() ([]string, error) {
 }
 
 func (e *Engine) ApplyDecay() (int, error) {
-	var count int
-	err := e.db.Reader().QueryRow(
+	return e.queryCount(
 		`SELECT COUNT(*) FROM notes n WHERE n.created_at < datetime('now','-30 days')
-		 AND NOT EXISTS (SELECT 1 FROM memory_links ml WHERE ml.source_id=n.id AND ml.source_type='note')`,
-	).Scan(&count)
+		 AND NOT EXISTS (SELECT 1 FROM memory_links ml WHERE ml.source_id=n.id AND ml.source_type='note')`)
+}
+
+func (e *Engine) DetectContradictions() (int, error) {
+	rows, err := e.db.Reader().Query(
+		`SELECT subject, predicate FROM facts WHERE invalid_at IS NULL GROUP BY subject, predicate HAVING COUNT(*)>1`,
+	)
 	if err != nil {
-		return 0, fmt.Errorf("count stale notes: %w", err)
+		return 0, fmt.Errorf("query conflicts: %w", err)
 	}
-	return count, nil
+	defer rows.Close()
+
+	type conflictGroup struct{ subject, predicate string }
+	var groups []conflictGroup
+	for rows.Next() {
+		var g conflictGroup
+		if err := rows.Scan(&g.subject, &g.predicate); err != nil {
+			return 0, fmt.Errorf("scan conflict group: %w", err)
+		}
+		groups = append(groups, g)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("iterate conflict groups: %w", err)
+	}
+
+	totalInvalidated := 0
+	now := time.Now().UTC().Format(time.DateTime)
+	for _, g := range groups {
+		factRows, err := e.db.Reader().Query(
+			`SELECT id FROM facts WHERE subject=? AND predicate=? AND invalid_at IS NULL ORDER BY valid_at DESC`,
+			g.subject, g.predicate,
+		)
+		if err != nil {
+			return totalInvalidated, fmt.Errorf("query facts for conflict: %w", err)
+		}
+		var factIDs []string
+		first := true
+		for factRows.Next() {
+			var id string
+			if err := factRows.Scan(&id); err != nil {
+				factRows.Close()
+				return totalInvalidated, fmt.Errorf("scan fact: %w", err)
+			}
+			if first {
+				first = false
+				continue
+			}
+			factIDs = append(factIDs, id)
+		}
+		factRows.Close()
+		for _, id := range factIDs {
+			if _, err := e.db.Writer().Exec(`UPDATE facts SET invalid_at=? WHERE id=?`, now, id); err != nil {
+				return totalInvalidated, fmt.Errorf("invalidate fact %s: %w", id, err)
+			}
+			totalInvalidated++
+		}
+	}
+	return totalInvalidated, nil
+}
+
+func (e *Engine) DiscoverLinks() (int, error) {
+	rows, err := e.db.Reader().Query(
+		`SELECT n.id, n.content FROM notes n LEFT JOIN memory_links ml ON ml.source_id=n.id AND ml.source_type='note' WHERE ml.id IS NULL`,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("query unlinked notes: %w", err)
+	}
+	defer rows.Close()
+
+	type unlinkedNote struct{ id, content string }
+	var notes []unlinkedNote
+	for rows.Next() {
+		var n unlinkedNote
+		if err := rows.Scan(&n.id, &n.content); err != nil {
+			return 0, fmt.Errorf("scan unlinked note: %w", err)
+		}
+		notes = append(notes, n)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("iterate unlinked notes: %w", err)
+	}
+
+	totalLinks := 0
+	for _, note := range notes {
+		query := buildFTSQuery(note.content)
+		if query == "" {
+			continue
+		}
+		matchRows, err := e.db.Reader().Query(
+			`SELECT n.id, rank FROM notes_fts fts JOIN notes n ON n.rowid=fts.rowid WHERE notes_fts MATCH ? ORDER BY rank LIMIT 10`, query,
+		)
+		if err != nil {
+			continue
+		}
+		for matchRows.Next() {
+			var targetID string
+			var rank float64
+			if err := matchRows.Scan(&targetID, &rank); err != nil {
+				continue
+			}
+			if targetID == note.id {
+				continue
+			}
+			strength := 0.5
+			if rank < -2.0 {
+				strength = 0.9
+			} else if rank < -1.0 {
+				strength = 0.7
+			}
+			if err := e.createLink(note.id, "note", targetID, "note", "related", strength); err == nil {
+				totalLinks++
+			}
+		}
+		matchRows.Close()
+	}
+	return totalLinks, nil
+}
+
+func buildFTSQuery(content string) string {
+	if len(content) > 100 {
+		content = content[:100]
+	}
+	words := strings.FieldsFunc(content, func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	})
+	var terms []string
+	seen := make(map[string]bool)
+	for _, w := range words {
+		w = strings.ToLower(w)
+		if len(w) < 3 || seen[w] {
+			continue
+		}
+		seen[w] = true
+		terms = append(terms, w)
+	}
+	if len(terms) == 0 {
+		return ""
+	}
+	if len(terms) > 10 {
+		terms = terms[:10]
+	}
+	return strings.Join(terms, " OR ")
+}
+
+func (e *Engine) createLink(sourceID, sourceType, targetID, targetType, relationship string, strength float64) error {
+	_, err := e.db.Writer().Exec(
+		`INSERT OR IGNORE INTO memory_links (id, source_id, source_type, target_id, target_type, relationship, strength, created_at) VALUES (?,?,?,?,?,?,?,?)`,
+		uuid.New().String(), sourceID, sourceType, targetID, targetType, relationship, strength, time.Now().UTC().Format(time.DateTime),
+	)
+	return err
 }
