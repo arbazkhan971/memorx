@@ -993,16 +993,16 @@ func crossFeatureScenarios() []Scenario {
 			Description: "Search with scope=current_feature — only current feature results",
 			Setup: []Action{
 				{Tool: "start_feature", Params: map[string]interface{}{"name": "cf-scoped-a"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Implemented the XRAY_ALPHA webhook handler for Stripe events", "type": "progress"}},
+				{Tool: "remember", Params: map[string]interface{}{"feature": "cf-scoped-a", "content": "Implemented the RADARFOX webhook handler for Stripe events", "type": "progress"}},
 				{Tool: "start_feature", Params: map[string]interface{}{"name": "cf-scoped-b"}},
-				{Tool: "remember", Params: map[string]interface{}{"content": "Implemented the XRAY_BETA email notification sender", "type": "progress"}},
+				{Tool: "remember", Params: map[string]interface{}{"feature": "cf-scoped-b", "content": "Implemented the SONARWOLF email notification sender", "type": "progress"}},
 			},
 			Query: Query{
 				Tool:   "search",
-				Params: map[string]interface{}{"query": "XRAY_BETA", "scope": "current_feature", "feature": "cf-scoped-b"},
+				Params: map[string]interface{}{"query": "SONARWOLF", "scope": "current_feature", "feature": "cf-scoped-b"},
 			},
-			ExpectedContains:   []string{"XRAY_BETA"},
-			ExpectedNotContain: []string{"XRAY_ALPHA"},
+			ExpectedContains:   []string{"SONARWOLF"},
+			ExpectedNotContain: []string{"RADARFOX"},
 		},
 	}
 }
@@ -1164,6 +1164,7 @@ func planTrackingScenarios() []Scenario {
 			Setup: []Action{
 				{Tool: "start_feature", Params: map[string]interface{}{"name": "pt-multi-a"}},
 				{Tool: "save_plan", Params: map[string]interface{}{
+					"feature": "pt-multi-a",
 					"title":   "Frontend Plan",
 					"content": "UI implementation",
 					"steps": []interface{}{
@@ -1173,6 +1174,7 @@ func planTrackingScenarios() []Scenario {
 				}},
 				{Tool: "start_feature", Params: map[string]interface{}{"name": "pt-multi-b"}},
 				{Tool: "save_plan", Params: map[string]interface{}{
+					"feature": "pt-multi-b",
 					"title":   "Backend Plan",
 					"content": "API implementation",
 					"steps": []interface{}{

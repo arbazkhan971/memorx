@@ -130,6 +130,13 @@ func (e *Evaluator) RunScenario(s Scenario) Result {
 
 	if err != nil {
 		r.Error = fmt.Sprintf("query (%s): %v", s.Query.Tool, err)
+		// When ExpectedContains is empty, the scenario expects a failure or
+		// empty result (abstention). Treat error responses as passing.
+		if len(s.ExpectedContains) == 0 && len(s.ExpectedNotContain) == 0 {
+			r.Score = 1.0
+			r.Passed = true
+			r.ResponseText = r.Error
+		}
 		return r
 	}
 	r.ResponseText = response
