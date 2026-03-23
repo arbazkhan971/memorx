@@ -22,6 +22,33 @@ type Fact struct {
 	Confidence float64
 }
 
+// factColumns is the SELECT list shared by all fact queries.
+const factColumns = `id, feature_id, COALESCE(session_id, ''), subject, predicate, object,
+        valid_at, COALESCE(invalid_at, ''), recorded_at, confidence`
+
+// scanFact scans a single fact row into a Fact struct.
+func scanFact(row interface{ Scan(dest ...any) error }) (Fact, error) {
+	var f Fact
+	err := row.Scan(&f.ID, &f.FeatureID, &f.SessionID,
+		&f.Subject, &f.Predicate, &f.Object,
+		&f.ValidAt, &f.InvalidAt, &f.RecordedAt, &f.Confidence)
+	return f, err
+}
+
+// collectFacts iterates rows and returns a slice of Facts.
+func collectFacts(rows *sql.Rows) ([]Fact, error) {
+	defer rows.Close()
+	var facts []Fact
+	for rows.Next() {
+		f, err := scanFact(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan fact: %w", err)
+		}
+		facts = append(facts, f)
+	}
+	return facts, rows.Err()
+}
+
 // CreateFact creates a new fact with contradiction resolution.
 // If an active fact with the same subject+predicate exists and the object differs,
 // the old fact is invalidated before inserting the new one.
@@ -37,93 +64,84 @@ func (s *Store) CreateFact(featureID, sessionID, subject, predicate, object stri
 		featureID, subject, predicate,
 	).Scan(&existingID, &existingObject)
 
-	if err == nil && existingObject != object {
+	if err == nil {
+		if existingObject == object {
+			// Same fact already exists, return it
+			f, err := scanFact(s.db.Reader().QueryRow(
+				`SELECT `+factColumns+` FROM facts WHERE id = ?`, existingID))
+			if err != nil {
+				return nil, fmt.Errorf("read existing fact: %w", err)
+			}
+			return &f, nil
+		}
 		// Contradiction: invalidate the old fact
-		if _, err := w.Exec(
-			`UPDATE facts SET invalid_at = ? WHERE id = ?`, now, existingID,
-		); err != nil {
+		if _, err := w.Exec(`UPDATE facts SET invalid_at = ? WHERE id = ?`, now, existingID); err != nil {
 			return nil, fmt.Errorf("invalidate old fact: %w", err)
 		}
-	} else if err == nil && existingObject == object {
-		// Same fact already exists, return it
-		existing := &Fact{}
-		err := s.db.Reader().QueryRow(
-			`SELECT id, feature_id, COALESCE(session_id, ''), subject, predicate, object,
-			        valid_at, COALESCE(invalid_at, ''), recorded_at, confidence
-			 FROM facts WHERE id = ?`, existingID,
-		).Scan(&existing.ID, &existing.FeatureID, &existing.SessionID,
-			&existing.Subject, &existing.Predicate, &existing.Object,
-			&existing.ValidAt, &existing.InvalidAt, &existing.RecordedAt, &existing.Confidence)
-		if err != nil {
-			return nil, fmt.Errorf("read existing fact: %w", err)
-		}
-		return existing, nil
 	}
 
 	// Insert new fact
 	id := uuid.New().String()
-	_, err = w.Exec(
+	if _, err = w.Exec(
 		`INSERT INTO facts (id, feature_id, session_id, subject, predicate, object, valid_at, recorded_at, confidence)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1.0)`,
 		id, featureID, nullIfEmpty(sessionID), subject, predicate, object, now, now,
-	)
-	if err != nil {
+	); err != nil {
 		return nil, fmt.Errorf("create fact: %w", err)
 	}
 
-	// Sync to FTS: get the rowid of the newly inserted fact
+	// Sync to FTS
 	var rowID int64
-	err = w.QueryRow(`SELECT rowid FROM facts WHERE id = ?`, id).Scan(&rowID)
-	if err != nil {
+	if err = w.QueryRow(`SELECT rowid FROM facts WHERE id = ?`, id).Scan(&rowID); err != nil {
 		return nil, fmt.Errorf("get fact rowid: %w", err)
 	}
-	_, err = w.Exec(
+	if _, err = w.Exec(
 		`INSERT INTO facts_fts(rowid, subject, predicate, object) VALUES (?, ?, ?, ?)`,
 		rowID, subject, predicate, object,
-	)
-	if err != nil {
+	); err != nil {
 		return nil, fmt.Errorf("sync fact to fts: %w", err)
 	}
 
 	return &Fact{
-		ID:         id,
-		FeatureID:  featureID,
-		SessionID:  sessionID,
-		Subject:    subject,
-		Predicate:  predicate,
-		Object:     object,
-		ValidAt:    now,
-		InvalidAt:  "",
-		RecordedAt: now,
-		Confidence: 1.0,
+		ID: id, FeatureID: featureID, SessionID: sessionID,
+		Subject: subject, Predicate: predicate, Object: object,
+		ValidAt: now, RecordedAt: now, Confidence: 1.0,
 	}, nil
 }
 
 // GetActiveFacts returns all active facts (invalid_at IS NULL) for a feature.
 func (s *Store) GetActiveFacts(featureID string) ([]Fact, error) {
-	rows, err := s.db.Reader().Query(
-		`SELECT id, feature_id, COALESCE(session_id, ''), subject, predicate, object,
-		        valid_at, COALESCE(invalid_at, ''), recorded_at, confidence
-		 FROM facts WHERE feature_id = ? AND invalid_at IS NULL
-		 ORDER BY valid_at DESC`,
-		featureID,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("get active facts: %w", err)
-	}
-	defer rows.Close()
+	return s.queryFacts(featureID, nil)
+}
 
-	var facts []Fact
-	for rows.Next() {
-		var f Fact
-		if err := rows.Scan(&f.ID, &f.FeatureID, &f.SessionID,
-			&f.Subject, &f.Predicate, &f.Object,
-			&f.ValidAt, &f.InvalidAt, &f.RecordedAt, &f.Confidence); err != nil {
-			return nil, fmt.Errorf("scan fact: %w", err)
-		}
-		facts = append(facts, f)
+// QueryFactsAsOf performs a bi-temporal query returning facts that were valid at a given time.
+func (s *Store) QueryFactsAsOf(featureID string, asOf time.Time) ([]Fact, error) {
+	return s.queryFacts(featureID, &asOf)
+}
+
+// queryFacts is the shared implementation for GetActiveFacts and QueryFactsAsOf.
+func (s *Store) queryFacts(featureID string, asOf *time.Time) ([]Fact, error) {
+	var query string
+	var args []any
+
+	if asOf != nil {
+		ts := asOf.UTC().Format(time.DateTime)
+		query = `SELECT ` + factColumns + ` FROM facts
+		         WHERE feature_id = ? AND valid_at <= ? AND (invalid_at IS NULL OR invalid_at > ?)
+		         ORDER BY valid_at DESC`
+		args = []any{featureID, ts, ts}
+	} else {
+		query = `SELECT ` + factColumns + ` FROM facts
+		         WHERE feature_id = ? AND invalid_at IS NULL
+		         ORDER BY valid_at DESC`
+		args = []any{featureID}
 	}
-	return facts, rows.Err()
+
+	rows, err := s.db.Reader().Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query facts: %w", err)
+	}
+	return collectFacts(rows)
 }
 
 // InvalidateFact sets invalid_at=now on a fact.
@@ -140,36 +158,6 @@ func (s *Store) InvalidateFact(factID string) error {
 		return fmt.Errorf("fact %q not found", factID)
 	}
 	return nil
-}
-
-// QueryFactsAsOf performs a bi-temporal query returning facts that were valid at a given time.
-// A fact is valid at time T if valid_at <= T AND (invalid_at IS NULL OR invalid_at > T).
-func (s *Store) QueryFactsAsOf(featureID string, asOf time.Time) ([]Fact, error) {
-	ts := asOf.UTC().Format(time.DateTime)
-	rows, err := s.db.Reader().Query(
-		`SELECT id, feature_id, COALESCE(session_id, ''), subject, predicate, object,
-		        valid_at, COALESCE(invalid_at, ''), recorded_at, confidence
-		 FROM facts
-		 WHERE feature_id = ? AND valid_at <= ? AND (invalid_at IS NULL OR invalid_at > ?)
-		 ORDER BY valid_at DESC`,
-		featureID, ts, ts,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("query facts as of: %w", err)
-	}
-	defer rows.Close()
-
-	var facts []Fact
-	for rows.Next() {
-		var f Fact
-		if err := rows.Scan(&f.ID, &f.FeatureID, &f.SessionID,
-			&f.Subject, &f.Predicate, &f.Object,
-			&f.ValidAt, &f.InvalidAt, &f.RecordedAt, &f.Confidence); err != nil {
-			return nil, fmt.Errorf("scan fact: %w", err)
-		}
-		facts = append(facts, f)
-	}
-	return facts, rows.Err()
 }
 
 // nullIfEmpty returns a sql.NullString that is NULL if the value is empty.
