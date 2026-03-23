@@ -187,6 +187,16 @@ func (s *DevMemServer) registerTools(srv *server.MCPServer) {
 			),
 			Handler: s.handleGenerateRules,
 		},
+		server.ServerTool{
+			Tool: mcplib.NewTool("devmem_manage",
+				mcplib.WithDescription("Browse, pin, unpin, or delete memories. Pinned memories always appear in context."),
+				mcplib.WithString("action", mcplib.Description("Action to perform: list, pin, unpin, delete"), mcplib.Required(), mcplib.Enum("list", "pin", "unpin", "delete")),
+				mcplib.WithString("id", mcplib.Description("Memory ID for pin/unpin/delete actions")),
+				mcplib.WithString("filter", mcplib.Description("Filter for list action: notes, facts, pinned, all"), mcplib.Enum("notes", "facts", "pinned", "all")),
+				mcplib.WithNumber("limit", mcplib.Description("Maximum number of memories to return (default: 20)")),
+			),
+			Handler: s.handleManage,
+		},
 	)
 }
 

@@ -23,6 +23,11 @@ func Migrate(db *DB) error {
 			return fmt.Errorf("apply v2 migration: %w", err)
 		}
 	}
+	if currentVersion < 3 {
+		if err := applyV3(w); err != nil {
+			return fmt.Errorf("apply v3 migration: %w", err)
+		}
+	}
 	return nil
 }
 
@@ -55,6 +60,26 @@ func applyV2(w *sql.DB) error {
 		return fmt.Errorf("add summary column: %w", err)
 	}
 	if _, err := tx.Exec("INSERT OR IGNORE INTO schema_version (version) VALUES (2)"); err != nil {
+		return fmt.Errorf("record version: %w", err)
+	}
+	return tx.Commit()
+}
+
+func applyV3(w *sql.DB) error {
+	tx, err := w.Begin()
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+	_, err = tx.Exec(`ALTER TABLE notes ADD COLUMN pinned INTEGER DEFAULT 0`)
+	if err != nil && !strings.Contains(err.Error(), "duplicate column") {
+		return fmt.Errorf("add notes pinned column: %w", err)
+	}
+	_, err = tx.Exec(`ALTER TABLE facts ADD COLUMN pinned INTEGER DEFAULT 0`)
+	if err != nil && !strings.Contains(err.Error(), "duplicate column") {
+		return fmt.Errorf("add facts pinned column: %w", err)
+	}
+	if _, err := tx.Exec("INSERT OR IGNORE INTO schema_version (version) VALUES (3)"); err != nil {
 		return fmt.Errorf("record version: %w", err)
 	}
 	return tx.Commit()
