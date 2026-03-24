@@ -1064,3 +1064,54 @@ func formatDiff(diff *memory.MemoryDiff, since time.Time) string {
 	return b.String()
 }
 
+func (s *DevMemServer) handlePromptMemory(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+	prompt, errRes := requireParam(req, "prompt"); if errRes != nil { return errRes, nil }
+	effectiveness, outcome := getStringArg(req, "effectiveness", "unknown"), getStringArg(req, "outcome", "")
+	var fid string; if f, _ := s.store.GetActiveFeature(); f != nil { fid = f.ID }
+	pm, err := s.store.StorePromptMemory(fid, prompt, effectiveness, outcome)
+	if err != nil { return respondErr("Failed: %v", err) }
+	var b strings.Builder; fmt.Fprintf(&b, "# Prompt stored\n\n- Effectiveness: %s\n- ID: %s\n", pm.Effectiveness, pm.ID[:8])
+	if outcome != "" { fmt.Fprintf(&b, "- Outcome: %s\n", outcome) }
+	if eff, _ := s.store.GetEffectivePrompts(3); len(eff) > 0 { b.WriteString("\n## Effective prompts\n\n"); for _, ep := range eff { fmt.Fprintf(&b, "- %s\n", truncate(ep.Prompt, 100)) } }
+	return mcplib.NewToolResultText(b.String()), nil
+}
+
+func (s *DevMemServer) handleAntiPatterns(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+	desc, errRes := requireParam(req, "description"); if errRes != nil { return errRes, nil }
+	cat := getStringArg(req, "category", "wrong_approach")
+	feat, errRes := s.requireActiveFeature(); if errRes != nil { return errRes, nil }
+	var b strings.Builder
+	if existing, _ := s.store.ListNotes(feat.ID, "anti_pattern", 50); len(existing) > 0 { dl := strings.ToLower(desc); for _, n := range existing { if strings.Contains(strings.ToLower(n.Content), dl) { fmt.Fprintf(&b, "# Warning: Similar anti-pattern exists\n\n- %s\n\n", truncate(n.Content, 100)); break } } }
+	note, err := s.store.CreateNote(feat.ID, s.currentSessionID, fmt.Sprintf("[%s] %s", cat, desc), "anti_pattern")
+	if err != nil { return respondErr("Failed: %v", err) }
+	fmt.Fprintf(&b, "# Anti-pattern recorded\n\n- Category: %s\n- ID: %s\n- Description: %s", cat, note.ID[:8], desc)
+	return mcplib.NewToolResultText(b.String()), nil
+}
+
+func (s *DevMemServer) handleTokenTracker(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+	tool, errRes := requireParam(req, "tool"); if errRes != nil { return errRes, nil }
+	inp, out := getIntArg(req, "input_tokens", 0), getIntArg(req, "output_tokens", 0)
+	if _, err := s.store.TrackTokenUsage(s.currentSessionID, tool, inp, out); err != nil { return respondErr("Failed: %v", err) }
+	sums, err := s.store.GetTokenSummary(); if err != nil { return respondErr("Failed: %v", err) }
+	var b strings.Builder; fmt.Fprintf(&b, "# Token usage recorded\n\n- Tool: %s\n- Input: %d\n- Output: %d\n\n%s", tool, inp, out, memory.FormatTokenSummary(sums))
+	return mcplib.NewToolResultText(b.String()), nil
+}
+
+func (s *DevMemServer) handleLearning(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+	content, errRes := requireParam(req, "content"); if errRes != nil { return errRes, nil }
+	var fid string; if f, _ := s.store.GetActiveFeature(); f != nil { fid = f.ID }
+	l, err := s.store.StoreLearning(fid, content, "memorx_learning"); if err != nil { return respondErr("Failed: %v", err) }
+	if fid != "" { if n, e := s.store.CreateNote(fid, s.currentSessionID, content, "decision"); e == nil { _ = s.store.PinMemory(n.ID, "note") } }
+	return respond("# Learning stored\n\n- Content: %s\n- ID: %s\n\nAuto-injected in future briefings.", content, l.ID[:8])
+}
+
+func (s *DevMemServer) handleContextBudget(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+	budget := getIntArg(req, "budget", 4000); if budget <= 0 { return respondErr("Budget must be positive") }
+	fid := ""; if fn := getStringArg(req, "feature", ""); fn != "" { id, er := s.resolveFeatureID(fn); if er != nil { return er, nil }; fid = id } else if f, _ := s.store.GetActiveFeature(); f != nil { fid = f.ID }
+	mems, used, err := s.store.GetContextBudget(budget, fid); if err != nil { return respondErr("Failed: %v", err) }
+	var b strings.Builder; fmt.Fprintf(&b, "# Context budget: %d/%d tokens\n\n", used, budget)
+	for _, m := range mems { p := ""; if m.Pinned { p = " [pinned]" }; fmt.Fprintf(&b, "- [%s%s] %s (~%dt, %.2f)\n", m.Type, p, truncate(m.Content, 100), m.TokenEstimate, m.Score) }
+	if len(mems) == 0 { b.WriteString("No memories found.\n") }
+	return mcplib.NewToolResultText(b.String()), nil
+}
+
