@@ -101,6 +101,8 @@ func TestAllToolsExist(t *testing.T) {
 		{"memorx_related"}, {"memorx_dependencies"},
 		{"memorx_diff"},
 		{"memorx_onboard"}, {"memorx_changelog"}, {"memorx_share"},
+		{"memorx_git_sync"}, {"memorx_team_decisions"}, {"memorx_conflict_detect"},
+		{"memorx_generate_adr"}, {"memorx_generate_readme"}, {"memorx_generate_api_docs"}, {"memorx_generate_runbook"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if _, ok := toolMap[tc.name]; !ok {

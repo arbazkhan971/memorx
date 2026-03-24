@@ -281,6 +281,57 @@ func (s *DevMemServer) registerTools(srv *server.MCPServer) {
 			),
 			Handler: s.handleShare,
 		},
+		// Wave 11: Offline Collaboration
+		server.ServerTool{
+			Tool: mcplib.NewTool("memorx_git_sync",
+				mcplib.WithDescription("Sync memory via git using append-only chunks (Engram pattern). Export writes new memories as a .jsonl.gz chunk file. Import reads chunks not yet imported. Zero merge conflicts."),
+				mcplib.WithString("action", mcplib.Description("Action: export or import"), mcplib.Required(), mcplib.Enum("export", "import")),
+				mcplib.WithString("path", mcplib.Description("Sync directory path (default: .memory/sync/)")),
+			),
+			Handler: s.handleGitSync,
+		},
+		server.ServerTool{
+			Tool: mcplib.NewTool("memorx_team_decisions",
+				mcplib.WithDescription("Shared decision log. Export all decisions as a portable .jsonl file, or import decisions from teammates with content-hash deduplication."),
+				mcplib.WithString("action", mcplib.Description("Action: export or import"), mcplib.Required(), mcplib.Enum("export", "import")),
+				mcplib.WithString("path", mcplib.Description("File path for export/import (default: decisions.jsonl)")),
+			),
+			Handler: s.handleTeamDecisions,
+		},
+		server.ServerTool{
+			Tool: mcplib.NewTool("memorx_conflict_detect",
+				mcplib.WithDescription("Detect contradicting decisions across imported team memory. Finds facts/decisions that contradict each other across features."),
+			),
+			Handler: s.handleConflictDetect,
+		},
+		// Wave 12: Doc Automation
+		server.ServerTool{
+			Tool: mcplib.NewTool("memorx_generate_adr",
+				mcplib.WithDescription("Auto-generate Architecture Decision Records from memory. Each decision becomes an ADR with context, decision, and consequences."),
+				mcplib.WithString("decision_id", mcplib.Description("Specific decision note ID, or omit for all decisions")),
+			),
+			Handler: s.handleGenerateADR,
+		},
+		server.ServerTool{
+			Tool: mcplib.NewTool("memorx_generate_readme",
+				mcplib.WithDescription("Auto-generate/update README from project map + memory. Combines project name, tech stack, architecture, features, recent changes, and setup instructions."),
+				mcplib.WithString("output", mcplib.Description("Output path (default: README.md at git root)")),
+			),
+			Handler: s.handleGenerateReadme,
+		},
+		server.ServerTool{
+			Tool: mcplib.NewTool("memorx_generate_api_docs",
+				mcplib.WithDescription("Track API endpoints from code changes + decisions. Searches notes/facts for API-related content and formats as API documentation."),
+			),
+			Handler: s.handleGenerateAPIDocs,
+		},
+		server.ServerTool{
+			Tool: mcplib.NewTool("memorx_generate_runbook",
+				mcplib.WithDescription("Operational runbook from error memory + decisions. Combines error_log entries with resolutions, related decisions, and known blockers."),
+				mcplib.WithString("feature", mcplib.Description("Scope to a specific feature (default: all)")),
+			),
+			Handler: s.handleGenerateRunbook,
+		},
 	)
 }
 
