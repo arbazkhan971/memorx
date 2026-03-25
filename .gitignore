@@ -1,3 +1,4 @@
 bin/
 .memory/
 .claude/
+.DS_Store
