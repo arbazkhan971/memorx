@@ -109,6 +109,14 @@ func TestAllToolsExist(t *testing.T) {
 		{"memorx_deduplicate"}, {"memorx_integrity_check"}, {"memorx_auto_link_code"},
 		// Workflow Integration
 		{"memorx_standup"}, {"memorx_branch_context"},
+		// Multi-Agent Memory
+		{"memorx_agent_register"}, {"memorx_agent_handoff"}, {"memorx_agent_scope"}, {"memorx_agent_merge"},
+		// Security & Compliance
+		{"memorx_audit_log"}, {"memorx_sensitive_filter"}, {"memorx_retention_policy"}, {"memorx_export_compliance"},
+		// Performance & Scale
+		{"memorx_vacuum"}, {"memorx_stats"}, {"memorx_archive"}, {"memorx_benchmark_self"},
+		// Ecosystem
+		{"memorx_version"}, {"memorx_doctor"}, {"memorx_config"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if _, ok := toolMap[tc.name]; !ok {

@@ -443,6 +443,25 @@ func (s *DevMemServer) registerTools(srv *server.MCPServer) {
 			),
 			Handler: s.handleBranchContext,
 		},
+		// --- Multi-Agent Memory ---
+		server.ServerTool{Tool: mcplib.NewTool("memorx_agent_register", mcplib.WithDescription("Register an AI agent identity with a name and role."), mcplib.WithString("name", mcplib.Description("Agent name"), mcplib.Required()), mcplib.WithString("role", mcplib.Description("Agent role"), mcplib.Enum("primary", "assistant", "reviewer"))), Handler: s.handleAgentRegister},
+		server.ServerTool{Tool: mcplib.NewTool("memorx_agent_handoff", mcplib.WithDescription("Transfer active context from one agent to another."), mcplib.WithString("from_agent", mcplib.Description("Source agent name"), mcplib.Required()), mcplib.WithString("to_agent", mcplib.Description("Target agent name"), mcplib.Required()), mcplib.WithString("summary", mcplib.Description("Handoff context summary"))), Handler: s.handleAgentHandoff},
+		server.ServerTool{Tool: mcplib.NewTool("memorx_agent_scope", mcplib.WithDescription("Define which features an agent can access."), mcplib.WithString("agent", mcplib.Description("Agent name"), mcplib.Required()), mcplib.WithArray("features", mcplib.Description("Array of feature names")), mcplib.WithString("action", mcplib.Description("Action: grant, revoke, or list"), mcplib.Enum("grant", "revoke", "list"))), Handler: s.handleAgentScope},
+		server.ServerTool{Tool: mcplib.NewTool("memorx_agent_merge", mcplib.WithDescription("Merge memory from parallel agent sessions."), mcplib.WithString("feature", mcplib.Description("Feature name to merge"), mcplib.Required())), Handler: s.handleAgentMerge},
+		// --- Security & Compliance ---
+		server.ServerTool{Tool: mcplib.NewTool("memorx_audit_log", mcplib.WithDescription("Immutable log of all memory operations."), mcplib.WithString("action", mcplib.Description("Action: query or log"), mcplib.Enum("query", "log")), mcplib.WithString("operation", mcplib.Description("Operation name (for log action)")), mcplib.WithString("details", mcplib.Description("Operation details (for log action)")), mcplib.WithNumber("limit", mcplib.Description("Max entries to return (default 20)"))), Handler: s.handleAuditLog},
+		server.ServerTool{Tool: mcplib.NewTool("memorx_sensitive_filter", mcplib.WithDescription("Auto-detect and redact sensitive data in memories."), mcplib.WithString("action", mcplib.Description("Action: scan or redact"), mcplib.Enum("scan", "redact")), mcplib.WithString("feature", mcplib.Description("Scope to a specific feature"))), Handler: s.handleSensitiveFilter},
+		server.ServerTool{Tool: mcplib.NewTool("memorx_retention_policy", mcplib.WithDescription("Set auto-delete policy for memories."), mcplib.WithString("action", mcplib.Description("Action: set, get, or apply"), mcplib.Enum("set", "get", "apply")), mcplib.WithNumber("days", mcplib.Description("Delete after N days")), mcplib.WithArray("types", mcplib.Description("Types to apply: notes, facts, commits"), mcplib.WithStringItems(mcplib.Enum("notes", "facts", "commits")))), Handler: s.handleRetentionPolicy},
+		server.ServerTool{Tool: mcplib.NewTool("memorx_export_compliance", mcplib.WithDescription("Export memory for compliance review."), mcplib.WithString("feature", mcplib.Description("Scope to a specific feature")), mcplib.WithString("format", mcplib.Description("Export format: json or csv"), mcplib.Enum("json", "csv"))), Handler: s.handleExportCompliance},
+		// --- Performance & Scale ---
+		server.ServerTool{Tool: mcplib.NewTool("memorx_vacuum", mcplib.WithDescription("Optimize the SQLite database. Run VACUUM and ANALYZE.")), Handler: s.handleVacuum},
+		server.ServerTool{Tool: mcplib.NewTool("memorx_stats", mcplib.WithDescription("Database statistics: row counts, file size.")), Handler: s.handleStats},
+		server.ServerTool{Tool: mcplib.NewTool("memorx_archive", mcplib.WithDescription("Move completed features to cold storage."), mcplib.WithString("feature", mcplib.Description("Feature name")), mcplib.WithString("action", mcplib.Description("Action: archive, restore, or list"), mcplib.Enum("archive", "restore", "list"))), Handler: s.handleArchive},
+		server.ServerTool{Tool: mcplib.NewTool("memorx_benchmark_self", mcplib.WithDescription("Run internal performance benchmarks.")), Handler: s.handleBenchmarkSelf},
+		// --- Ecosystem ---
+		server.ServerTool{Tool: mcplib.NewTool("memorx_version", mcplib.WithDescription("Show version, build info, tool count.")), Handler: s.handleVersion},
+		server.ServerTool{Tool: mcplib.NewTool("memorx_doctor", mcplib.WithDescription("Diagnose common issues: DB, migrations, FTS, WAL, corruption.")), Handler: s.handleDoctor},
+		server.ServerTool{Tool: mcplib.NewTool("memorx_config", mcplib.WithDescription("Manage configuration."), mcplib.WithString("action", mcplib.Description("Action: get, set, or list"), mcplib.Enum("get", "set", "list")), mcplib.WithString("key", mcplib.Description("Config key")), mcplib.WithString("value", mcplib.Description("Config value (for set)"))), Handler: s.handleConfig},
 	)
 }
 

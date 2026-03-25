@@ -48,7 +48,40 @@ func Migrate(db *DB) error {
 			return fmt.Errorf("apply v7 migration: %w", err)
 		}
 	}
+	if currentVersion < 8 {
+		if err := applyV8AgentsTables(w); err != nil {
+			return fmt.Errorf("apply v8 migration: %w", err)
+		}
+	}
 	return nil
+}
+
+func applyV8AgentsTables(w *sql.DB) error {
+	tx, err := w.Begin()
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+	for _, stmt := range []string{
+		`CREATE TABLE IF NOT EXISTS agents (name TEXT PRIMARY KEY, role TEXT NOT NULL DEFAULT 'primary', registered_at TEXT NOT NULL DEFAULT (datetime('now')))`,
+		`CREATE TABLE IF NOT EXISTS agent_handoffs (id TEXT PRIMARY KEY, from_agent TEXT NOT NULL, to_agent TEXT NOT NULL, summary TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT (datetime('now')))`,
+		`CREATE INDEX IF NOT EXISTS idx_agent_handoffs_from ON agent_handoffs(from_agent)`,
+		`CREATE INDEX IF NOT EXISTS idx_agent_handoffs_to ON agent_handoffs(to_agent)`,
+		`CREATE TABLE IF NOT EXISTS agent_scopes (agent TEXT NOT NULL, feature TEXT NOT NULL, PRIMARY KEY(agent, feature))`,
+		`CREATE TABLE IF NOT EXISTS audit_log (id TEXT PRIMARY KEY, operation TEXT NOT NULL, details TEXT DEFAULT '', agent TEXT DEFAULT 'system', created_at TEXT NOT NULL DEFAULT (datetime('now')))`,
+		`CREATE INDEX IF NOT EXISTS idx_audit_log_created ON audit_log(created_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_audit_log_operation ON audit_log(operation)`,
+		`CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, value TEXT NOT NULL DEFAULT '')`,
+		`CREATE TABLE IF NOT EXISTS archive_features (feature_name TEXT PRIMARY KEY, archived_at TEXT NOT NULL DEFAULT (datetime('now')))`,
+	} {
+		if _, err := tx.Exec(stmt); err != nil {
+			return fmt.Errorf("exec: %w", err)
+		}
+	}
+	if _, err := tx.Exec("INSERT OR IGNORE INTO schema_version (version) VALUES (8)"); err != nil {
+		return fmt.Errorf("record version: %w", err)
+	}
+	return tx.Commit()
 }
 
 func applyV7BranchContext(w *sql.DB) error {
