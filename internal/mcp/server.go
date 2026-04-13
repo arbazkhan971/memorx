@@ -462,6 +462,40 @@ func (s *DevMemServer) registerTools(srv *server.MCPServer) {
 		server.ServerTool{Tool: mcplib.NewTool("memorx_version", mcplib.WithDescription("Show version, build info, tool count.")), Handler: s.handleVersion},
 		server.ServerTool{Tool: mcplib.NewTool("memorx_doctor", mcplib.WithDescription("Diagnose common issues: DB, migrations, FTS, WAL, corruption.")), Handler: s.handleDoctor},
 		server.ServerTool{Tool: mcplib.NewTool("memorx_config", mcplib.WithDescription("Manage configuration."), mcplib.WithString("action", mcplib.Description("Action: get, set, or list"), mcplib.Enum("get", "set", "list")), mcplib.WithString("key", mcplib.Description("Config key")), mcplib.WithString("value", mcplib.Description("Config value (for set)"))), Handler: s.handleConfig},
+		// --- Progressive-disclosure search (claude-mem parity) ---
+		server.ServerTool{
+			Tool: mcplib.NewTool("memorx_search_index",
+				mcplib.WithDescription("Compact search index. Returns IDs, types, and short snippets only — ~30 tokens per hit. Use this first to filter before fetching full content via memorx_get_memory."),
+				mcplib.WithString("query", mcplib.Description("Search query"), mcplib.Required()),
+				mcplib.WithString("scope", mcplib.Description("Search scope: current_feature or all_features"), mcplib.Enum("current_feature", "all_features")),
+				mcplib.WithArray("types", mcplib.Description("Filter by memory types"), mcplib.WithStringItems(mcplib.Enum("notes", "commits", "facts", "plans"))),
+				mcplib.WithNumber("limit", mcplib.Description("Max results (default 25)")),
+			),
+			Handler: s.handleSearchIndex,
+		},
+		server.ServerTool{
+			Tool: mcplib.NewTool("memorx_timeline",
+				mcplib.WithDescription("Chronological window of memories around a reference point. Shows what happened before and after a specific note (by id) or the most recent N notes. Middle layer of the 3-layer search pattern."),
+				mcplib.WithString("around_id", mcplib.Description("Note ID to center the timeline on (optional; defaults to recent notes for the active feature)")),
+				mcplib.WithNumber("window", mcplib.Description("How many notes before and after (default 10)")),
+			),
+			Handler: s.handleTimeline,
+		},
+		server.ServerTool{
+			Tool: mcplib.NewTool("memorx_get_memory",
+				mcplib.WithDescription("Full detail for a specific memory ID including links. Use this after memorx_search_index has identified relevant hits."),
+				mcplib.WithString("id", mcplib.Description("Memory (note) ID"), mcplib.Required()),
+			),
+			Handler: s.handleGetMemory,
+		},
+		server.ServerTool{
+			Tool: mcplib.NewTool("memorx_observe",
+				mcplib.WithDescription("Record a lightweight observation. Intended for hook-driven automatic capture — cheaper than memorx_remember, no auto-linking or plan promotion."),
+				mcplib.WithString("content", mcplib.Description("Observation content"), mcplib.Required()),
+				mcplib.WithString("source", mcplib.Description("Source of the observation (e.g. hook name, tool name)")),
+			),
+			Handler: s.handleObserve,
+		},
 	)
 }
 

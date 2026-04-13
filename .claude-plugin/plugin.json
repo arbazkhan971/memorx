@@ -1,0 +1,73 @@
+{
+  "name": "memorx",
+  "version": "1.0.0",
+  "description": "SOTA developer memory: persistent, project-scoped memory across sessions, tools, and features. Auto-captures via Claude Code lifecycle hooks.",
+  "author": "arbazkhan971",
+  "homepage": "https://github.com/arbazkhan971/memorx",
+  "license": "MIT",
+  "commands": [
+    {
+      "name": "memorx-install",
+      "description": "Install memorx hooks and register MCP server",
+      "command": "memorx install"
+    },
+    {
+      "name": "memorx-dashboard",
+      "description": "Open the memorx local web dashboard",
+      "command": "memorx dashboard"
+    },
+    {
+      "name": "memorx-doctor",
+      "description": "Run memorx self-diagnostics",
+      "command": "memorx doctor"
+    }
+  ],
+  "mcpServers": {
+    "memorx": {
+      "command": "memorx",
+      "transport": "stdio"
+    }
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          { "type": "command", "command": "memorx hook session-start", "timeout": 10 }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "matcher": "",
+        "hooks": [
+          { "type": "command", "command": "memorx hook user-prompt-submit", "timeout": 5 }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          { "type": "command", "command": "memorx hook post-tool-use", "timeout": 10 }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          { "type": "command", "command": "memorx hook stop", "timeout": 5 }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "matcher": "",
+        "hooks": [
+          { "type": "command", "command": "memorx hook session-end", "timeout": 15 }
+        ]
+      }
+    ]
+  }
+}

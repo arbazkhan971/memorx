@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/arbazkhan971/memorx/internal/dashboard"
 	"github.com/arbazkhan971/memorx/internal/git"
 	"github.com/arbazkhan971/memorx/internal/memory"
 	"github.com/arbazkhan971/memorx/internal/plans"
@@ -301,6 +302,12 @@ func (s *DevMemServer) handleRemember(_ context.Context, req mcplib.CallToolRequ
 		return respondErr("Failed to save note: %v", err)
 	}
 	lc, _ := s.store.AutoLink(note.ID, "note", content)
+	dashboard.PublishEvent("remember", map[string]any{
+		"id":      note.ID,
+		"feature": feature.Name,
+		"type":    note.Type,
+		"content": note.Content,
+	})
 	resp := fmt.Sprintf("# Remembered (%s)\n\n- ID: %s\n- Links created: %d\n", noteType, note.ID[:8], lc)
 	if plans.IsPlanLike(content) {
 		if steps := plans.ParseSteps(content); len(steps) > 0 {

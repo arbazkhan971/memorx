@@ -1,168 +1,152 @@
 # memorX
 
-SOTA developer memory system. Single Go binary MCP server that gives any coding CLI persistent, project-scoped memory across sessions, tools, and features.
+**Your AI picks up exactly where you left off — across commits, plans, and sessions.**
 
-**320 tests | 17 tools | 70/70 benchmark (99.6%) | <1ms latency | Zero dependencies**
+One command to install. Zero-friction capture via Claude Code hooks. A live local dashboard so you can *see* your AI's memory. Single Go binary, zero runtime dependencies, 100% local.
 
-## The Problem
+```bash
+memorx install          # wires Claude Code hooks + MCP server in one shot
+memorx dashboard        # open http://127.0.0.1:37778 — live memory stream
+```
 
-Every AI coding CLI (Claude Code, Codex, Cursor, Windsurf, Gemini CLI) suffers from amnesia. Close a session, lose all context. Switch tools, start from scratch. You waste 5-10 minutes per session re-explaining your project, decisions, and progress.
+That's it. Open Claude Code and every session automatically knows where you left off.
+
+---
+
+## Why memorX
+
+Every AI coding CLI (Claude Code, Codex, Cursor, Windsurf, Gemini CLI) suffers from amnesia. Close a session, lose all context. Switch tools, start from scratch. You waste 5–10 minutes per session re-explaining your project, decisions, and progress.
 
 memorX fixes this. One binary, works everywhere, remembers everything.
 
-## What It Does
+## What you get
 
-- **Session continuity** — picks up where you left off, in any MCP-compatible tool
-- **Feature tracking** — organize work by feature ("auth-v2", "billing-fix")
-- **Git integration** — auto-syncs commits with intent classification (feature/bugfix/refactor)
-- **Plan persistence** — plans survive across sessions, auto-track progress from commits
-- **Bi-temporal facts** — tracks what's true now AND what was true before (contradiction resolution)
-- **Memory linking** — A-MEM/Zettelkasten-style connections between related memories
-- **Background consolidation** — detects contradictions, decays stale memories, generates summaries
-- **3-layer search** — FTS5 + trigram + fuzzy across all memory types
-- **Auto-briefing** — "welcome back" context on every session start
-- **Session summaries** — captures what happened for next time
-- **Development analytics** — session counts, commit patterns, blocker frequency
-- **Memory health** — health score (0-100) with actionable suggestions
-- **Smart forgetting** — clean up stale facts, notes, completed features
-- **AGENTS.md generation** — auto-generate universal rules file from memory
+- **Zero-friction capture** — Claude Code lifecycle hooks auto-capture sessions, commits, and decisions. No tool calls required.
+- **Live local dashboard** — `memorx dashboard` opens a real-time web UI showing active feature, plan progress, memory stream, and git timeline. Embedded in the binary, no Node or Bun required.
+- **Auto-briefing on every session** — a SessionStart hook injects a "welcome back" summary into every new Claude Code conversation.
+- **Git-native** — auto-syncs commits with intent classification (feature/bugfix/refactor), matches commits to plan steps.
+- **Plan persistence** — plans survive across sessions, auto-track progress from commits.
+- **Bi-temporal facts** — tracks what's true now AND what was true before (contradiction resolution, time-travel queries).
+- **Memory linking** — A-MEM/Zettelkasten-style connections between related memories.
+- **3-layer progressive-disclosure search** — `search_index` → `timeline` → `get_memory`, ~10× token savings on recall.
+- **Privacy tags** — wrap anything in `<private>…</private>` and it's stripped at the storage boundary. Never persisted.
+- **Session summaries** — on SessionEnd, auto-summarize the transcript (rule-based, no LLM call).
+- **Universal MCP** — works with Claude Code, Cursor, Codex, Windsurf, Gemini CLI — any MCP client.
 
 ## Install
 
+### One command (recommended)
+
 ```bash
 go install github.com/arbazkhan971/memorx/cmd/devmem@latest
+memorx install
 ```
 
-Or build from source:
-```bash
-git clone https://github.com/arbazkhan971/memorx.git
-cd memorx
-go build -o bin/memorx ./cmd/devmem
-```
+`memorx install` detects Claude Code, writes hooks into `~/.claude/settings.json`, registers the MCP server via `claude mcp add`, and sets up `~/.memorx/settings.json`. Idempotent — re-run any time.
 
-## Setup
+### Manual
 
-### Claude Code
 ```bash
+# Claude Code
 claude mcp add -s user --transport stdio memorx -- memorx
+
+# Cursor — add to .cursor/mcp.json:
+{ "mcpServers": { "memorx": { "command": "memorx", "transport": "stdio" } } }
 ```
 
-### Cursor
-Add to `.cursor/mcp.json`:
-```json
-{
-    "mcpServers": {
-        "memorx": { "command": "memorx", "transport": "stdio" }
-    }
-}
+### Verify
+
+```bash
+memorx doctor           # self-test: DB, hooks, binary on PATH
 ```
 
-### Windsurf / Codex / Other MCP Clients
-Add `memorx` as a stdio MCP server in your tool's MCP configuration.
+## Dashboard
 
-### Recommended: Add to CLAUDE.md
-```markdown
-## Memory
-This project uses memorX. At the start of every session:
-1. Call memorx_briefing to see where we left off
-2. When making decisions, call memorx_remember with type="decision"
-3. Before ending, call memorx_end_session with a summary
+```bash
+memorx dashboard                # :37778 by default
+memorx dashboard --port 8080    # custom port
 ```
 
-## Tools (17)
+The dashboard shows your active feature, plan progress, memory counts, recent notes, recent commits, a search box, and a **live event stream** that updates in real-time via SSE as hooks and MCP tools write to memory. Pure Go `net/http` + embedded HTML — no Node, no bundler, no external process.
 
-### Core
+## How it works
+
+```
+┌─ Claude Code session ─────────────────────────────────────┐
+│                                                           │
+│  SessionStart ──────▶ memorx hook session-start           │
+│                        └▶ briefing injected into context  │
+│                                                           │
+│  you prompt ────────▶ memorx hook user-prompt-submit      │
+│                        └▶ observation stored (auto)       │
+│                                                           │
+│  Claude runs Edit ──▶ (captured by transcript)            │
+│                                                           │
+│  Claude runs Bash ──▶ memorx hook post-tool-use           │
+│    (git commit)        └▶ sync commits, classify intent,  │
+│                           match to plan steps             │
+│                                                           │
+│  SessionEnd ────────▶ memorx hook session-end             │
+│                        └▶ transcript summarized,          │
+│                           session closed with summary     │
+└───────────────────────────────────────────────────────────┘
+                             │
+                             ▼
+                  .memory/memory.db (SQLite, WAL)
+                             │
+                             ▼
+                 memorx dashboard (localhost:37778)
+```
+
+All hooks are subcommands of the single `memorx` binary — they share the same DB connection pool and the same code as the MCP server. No separate worker process, no port conflicts, no orphan daemons.
+
+## Tools (88 MCP tools)
+
+memorX exposes **88 MCP tools** across core memory, search, git sync, plans, sessions, analytics, time-travel, predictive intelligence, self-healing, multi-agent, compliance, and workflow integration. Highlights:
+
 | Tool | What it does |
 |------|-------------|
-| `memorx_status` | Project overview, active feature, plan progress |
-| `memorx_briefing` | Quick "welcome back" — what you were working on, where you left off |
-| `memorx_list_features` | All features with status and commit breakdown |
-| `memorx_start_feature` | Create or resume a feature |
-| `memorx_switch_feature` | Switch to a different feature |
-| `memorx_get_context` | Full context at 3 tiers: compact (~200 tokens) / standard (~500) / detailed (~1500) |
+| `memorx_briefing` | Quick "welcome back" — what you were working on |
+| `memorx_remember` | Save a note, decision, blocker. Auto-links to related memories |
+| `memorx_search` | 3-layer FTS5 + trigram search across all memory types |
+| `memorx_search_index` | **New.** Compact hit index (~30 tokens/hit) — filter before fetching |
+| `memorx_timeline` | **New.** Chronological window around a memory or the recent feed |
+| `memorx_get_memory` | **New.** Full detail for a specific memory ID |
+| `memorx_observe` | **New.** Lightweight observation capture (used by hooks) |
 | `memorx_sync` | Pull git commits, classify intent, auto-match to plan steps |
-| `memorx_remember` | Save a note, decision, blocker, or next step. Auto-links to related memories |
-| `memorx_search` | 3-layer search (FTS5 + trigram + fuzzy) across all memory types |
-| `memorx_save_plan` | Store a plan with trackable steps. Supersedes old plans, carries completed steps |
+| `memorx_save_plan` | Store a plan with trackable steps that survives sessions |
+| `memorx_end_session` | End session with summary — next session reads it automatically |
+| `memorx_health` | Memory health score (0–100) with actionable suggestions |
+| `memorx_forget` | Smart cleanup: stale facts, stale notes, completed features |
+| `memorx_generate_rules` | Auto-generate `AGENTS.md` from memory |
 
-### Session Management
-| Tool | What it does |
-|------|-------------|
-| `memorx_end_session` | End session with a summary — next session reads it automatically |
-| `memorx_import_session` | Bootstrap memory from current conversation (decisions, facts, plans) |
-| `memorx_export` | Export feature memory as markdown or JSON |
+Full tool reference: `memorx` (no args) starts the MCP server; every MCP-aware client can introspect the tool list.
 
-### Intelligence
-| Tool | What it does |
-|------|-------------|
-| `memorx_analytics` | Dev patterns: session counts, commit intent breakdown, blockers, time spent |
-| `memorx_health` | Memory health score (0-100) with suggestions (conflicts, stale data, orphans) |
-| `memorx_forget` | Smart cleanup: stale facts, stale notes, completed features, or specific IDs |
-| `memorx_generate_rules` | Auto-generate AGENTS.md from memory — universal rules file for all CLIs |
+## Privacy
 
-## How It Works
+Wrap anything you don't want stored in `<private>...</private>` tags:
 
 ```
-You open Claude Code on Monday:
-  memorX: "Welcome back! Active feature: auth-v2 (branch: feature/auth-v2)
-           Plan: Auth Migration (4/7 steps done)
-           Last session: Friday via claude-code
-           Recent: Token refresh working, need to test expiry edge cases"
-
-You work, make commits, make decisions.
-  memorx_sync → captures commits, classifies intent, matches plan steps
-  memorx_remember → stores decisions with auto-linking
-  memorx_end_session → "Completed token refresh tests. Next: update routes"
-
-Tuesday, you open Cursor on the same project:
-  memorX: "Welcome back! Last session summary: Completed token refresh tests.
-           Next: update routes. Plan: 5/7 steps done."
-
-  Full context in 1 tool call. Zero re-explaining.
-
-Wednesday, you open Codex CLI:
-  Same memory. Same context. Same progress.
+"Our API key is <private>sk-abc123</private>" → "Our API key is "
 ```
+
+Stripping happens at the Store boundary (`internal/memory/privacy.go`), so it's enforced uniformly across hooks, MCP tools, import, and dashboard ingestion. If a note is *entirely* private, the store rejects it rather than persisting an empty record.
 
 ## Parallel Work (Multiple CLIs Simultaneously)
 
 memorX supports concurrent access via SQLite WAL mode:
 
 ```
-Terminal 1: Claude Code          Terminal 2: Cursor
+Terminal 1: Claude Code         Terminal 2: Cursor
 ┌────────────────────┐          ┌────────────────────┐
-│ feature: auth-v2   │          │ feature: billing    │
-│ "Token refresh     │          │ "Webhook handler    │
-│  working"          │          │  done"              │
+│ feature: auth-v2   │          │ feature: billing   │
+│ "Token refresh     │          │ "Webhook handler   │
+│  working"          │          │  done"             │
 └────────┬───────────┘          └────────┬───────────┘
          └──────────┬────────────────────┘
                     ▼
             .memory/memory.db
             (WAL mode: concurrent reads, serialized writes)
-```
-
-Both tools read/write to the same database. Different features don't interfere. Search across all features with `scope=all_features`.
-
-## Importing Existing Sessions
-
-Already been working without memorX? Bootstrap from your current conversation:
-
-```
-You: "Import everything we've discussed into memorX"
-
-Claude calls memorx_import_session with:
-  feature_name: "auth-v2"
-  decisions: ["Chose better-auth for compliance", "Using opaque tokens"]
-  progress_notes: ["Middleware extracted", "Token refresh implemented"]
-  facts: [{ subject: "auth", predicate: "uses", object: "better-auth" }]
-  plan_title: "Auth Migration"
-  plan_steps: [
-    { title: "Extract middleware", status: "completed" },
-    { title: "Token refresh", status: "completed" },
-    { title: "Update routes", status: "pending" }
-  ]
-
-Result: 8 items imported, 3 links created. Future sessions have full context.
 ```
 
 ## Architecture
@@ -171,24 +155,28 @@ Result: 8 items imported, 3 links created. Future sessions have full context.
 MCP Client (Claude Code / Cursor / Codex / Windsurf)
     │ stdio
     ▼
-memorX (single Go binary, 13MB)
-    ├── MCP Layer (17 tools + 2 resources)
+memorX (single Go binary, ~18MB)
+    ├── CLI dispatcher (install, hook, dashboard, doctor, version)
+    ├── MCP Layer (88 tools + 2 resources)
+    ├── Hook subcommands (session-start, post-tool-use, session-end, ...)
+    ├── Dashboard (net/http + embed, SSE live stream on :37778)
     ├── Session Manager (features, sessions, briefings)
     ├── Git Engine (commits, intent classification, sync)
     ├── Search Engine (FTS5 + trigram + BM25 scoring)
     ├── Plan Engine (CRUD, auto-detect, commit-to-step matching)
-    ├── Memory Core (bi-temporal facts, notes, A-MEM links)
+    ├── Memory Core (bi-temporal facts, notes, A-MEM links, privacy)
     ├── Consolidation Engine (contradictions, decay, summarization)
     ├── Analytics (dev patterns, health scoring)
     └── SQLite (WAL mode, .memory/memory.db)
 ```
 
 **Key design choices:**
-- **Single binary** — no Docker, no daemon, no external dependencies
+- **Single binary** — no Docker, no daemon, no external dependencies (no Node, no Bun, no Python, no Chroma)
 - **SQLite + WAL** — concurrent access from multiple tools, sub-millisecond writes
-- **FTS5** — full-text search with BM25 ranking, trigram fallback, no embedding model needed
-- **Bi-temporal** — every fact has valid_at/invalid_at, enables "what was true last week?" queries
+- **FTS5 + trigram** — full-text search with BM25 ranking, fuzzy fallback, no embedding model needed
+- **Bi-temporal** — every fact has `valid_at`/`invalid_at`, enables "what was true last week?" queries
 - **stdio transport** — MCP client spawns the binary, communicates via stdin/stdout
+- **`//go:embed` dashboard** — HTML/JS bundled into the binary, dashboard is a subcommand of the same executable
 
 ## Benchmark
 
@@ -214,45 +202,32 @@ Overall: 99.6% score | 100% accuracy | <1ms latency
 
 ## Token Savings
 
-memorX reduces wasted tokens by eliminating context re-establishment:
-
 ```
-Without memorX: 5,000-10,000 tokens per session re-explaining context
-With memorX:    200-500 tokens via memorx_briefing + memorx_get_context
+Without memorX: 5,000–10,000 tokens per session re-explaining context
+With memorX:    200–500 tokens via memorx_briefing + memorx_search_index
 
 Estimated savings: ~$265/month for heavy users (3+ sessions/day)
 ```
 
-## What Makes This SOTA
+The new progressive-disclosure search (`memorx_search_index` → `memorx_get_memory`) adds another ~10× savings on recall by filtering before fetching full content.
 
-No other MCP memory tool combines all of these:
+## Comparison
 
-| Feature | memorX | Mem0 | Zep | Supermemory | Letta | KeepGoing |
-|---------|--------|------|-----|-------------|-------|-----------|
-| Session/feature tracking | Yes | No | No | No | No | Partial |
-| Git commit integration | Yes | No | No | No | No | Partial |
-| Plan persistence | Yes | No | No | No | No | No |
-| Bi-temporal facts | Yes | No | Yes | Partial | No | No |
-| Memory linking | Yes | Yes | Yes | Yes | No | No |
-| Auto-briefing on connect | Yes | No | No | No | No | Yes |
-| Session summaries | Yes | No | No | No | No | No |
-| Dev analytics | Yes | No | No | No | No | No |
-| Memory health scoring | Yes | No | No | No | No | No |
-| Smart forgetting | Yes | No | No | No | No | No |
-| AGENTS.md generation | Yes | No | No | No | No | No |
-| Single binary, zero deps | Yes | No | No | No | No | No |
-| 100% local, no cloud | Yes | No | No | No | Partial | Yes |
-| Built-in benchmark | Yes | No | No | Yes | Yes | No |
-
-## Cloud Roadmap
-
-memorX is local-first but designed for future cloud sync:
-- Bi-temporal facts enable conflict-free merging
-- Append-only memory links can be union-merged
-- Session attribution tracks which machine/tool created each memory
-- Chunk-based sync model (Engram-inspired) for zero-conflict replication
-
-Planned: team memory, multi-machine sync, cross-project intelligence, dashboard.
+| Feature | memorX | claude-mem | Mem0 | Zep | KeepGoing |
+|---------|--------|------------|------|-----|-----------|
+| Automatic capture via hooks | Yes | Yes | No | No | Yes |
+| Live local web dashboard | Yes | Yes | No | No | No |
+| Session/feature tracking | Yes | Partial | No | No | Partial |
+| Git commit integration | Yes | No | No | No | Partial |
+| Plan persistence | Yes | No | No | No | No |
+| Bi-temporal facts | Yes | No | No | Yes | No |
+| Memory linking | Yes | No | Yes | Yes | No |
+| 3-layer progressive search | Yes | Yes | No | No | No |
+| Privacy tags | Yes | Yes | No | No | No |
+| Single binary, zero deps | Yes | No | No | No | No |
+| Works with any MCP client | Yes | Partial | No | No | No |
+| 100% local, no cloud | Yes | Yes | No | No | Yes |
+| Built-in benchmark | Yes | No | No | No | No |
 
 ## License
 
