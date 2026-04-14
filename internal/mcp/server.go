@@ -103,9 +103,9 @@ func (s *DevMemServer) registerTools(srv *server.MCPServer) {
 		},
 		server.ServerTool{
 			Tool: mcplib.NewTool("memorx_remember",
-				mcplib.WithDescription("Save a note, decision, or observation. Auto-links to related memories. If content looks like a plan (3+ numbered steps), auto-promotes to a plan."),
+				mcplib.WithDescription("Save a note, decision, blocker, progress update, or next step. Auto-links to related memories. If content looks like a plan (3+ numbered steps), auto-promotes to a plan."),
 				mcplib.WithString("content", mcplib.Description("The content to remember"), mcplib.Required()),
-				mcplib.WithString("type", mcplib.Description("Type of note: note, decision, observation, blocker"), mcplib.Enum("note", "decision", "observation", "blocker")),
+				mcplib.WithString("type", mcplib.Description("Type of note: note, decision, blocker, progress, next_step"), mcplib.Enum("note", "decision", "blocker", "progress", "next_step")),
 			),
 			Handler: s.handleRemember,
 		},

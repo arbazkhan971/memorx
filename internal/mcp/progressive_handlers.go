@@ -172,8 +172,9 @@ func (s *DevMemServer) handleGetMemory(_ context.Context, req mcplib.CallToolReq
 }
 
 // handleObserve is the lightweight capture path used by hooks. It writes
-// an "observation" note without auto-linking or other heavy processing,
-// so it stays cheap to call on every tool invocation.
+// a note with an "obs:" prefix so it's identifiable as hook-captured,
+// without auto-linking or plan promotion, keeping it cheap to call on
+// every tool invocation.
 func (s *DevMemServer) handleObserve(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	content, errRes := requireParam(req, "content")
 	if errRes != nil {
@@ -191,8 +192,8 @@ func (s *DevMemServer) handleObserve(_ context.Context, req mcplib.CallToolReque
 		sessionID = sess.ID
 	}
 
-	tagged := strings.TrimSpace(source + ": " + content)
-	note, err := s.store.CreateNote(f.ID, sessionID, tagged, "observation")
+	tagged := strings.TrimSpace("obs: " + source + ": " + content)
+	note, err := s.store.CreateNote(f.ID, sessionID, tagged, "note")
 	if err != nil {
 		return respondErr("Observe failed: %v", err)
 	}

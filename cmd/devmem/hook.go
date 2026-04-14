@@ -115,15 +115,18 @@ func hookUserPromptSubmit(store *memory.Store, p hookEvent) error {
 	if sess != nil {
 		sessionID = sess.ID
 	}
-	content := "user: " + truncatePrompt(p.Prompt, 500)
-	note, err := store.CreateNote(feature.ID, sessionID, content, "observation")
-	if err == nil && note != nil {
-		dashboard.PublishEvent("observation", map[string]any{
-			"feature": feature.Name,
-			"content": note.Content,
-			"type":    note.Type,
-		})
+	// Stored as a regular note with an "obs:" prefix so it's recognizable
+	// as hook-captured without needing a new schema type.
+	content := "obs: user prompt: " + truncatePrompt(p.Prompt, 500)
+	note, err := store.CreateNote(feature.ID, sessionID, content, "note")
+	if err != nil {
+		return nil
 	}
+	dashboard.PublishEvent("observation", map[string]any{
+		"feature": feature.Name,
+		"content": note.Content,
+		"type":    note.Type,
+	})
 	return nil
 }
 
