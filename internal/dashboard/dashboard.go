@@ -69,12 +69,20 @@ func (b *Broker) publish(e Event) {
 
 // PublishEvent is the global entry point — hook handlers and MCP tools
 // call this to broadcast updates to the dashboard.
+//
+// Events are written to a file-based log (.memory/events.jsonl) so they
+// can cross process boundaries: the MCP server, hooks, and dashboard
+// all run in separate processes but share the same repo-local log. The
+// dashboard tails that log and re-publishes each new entry into its
+// in-process broker for SSE subscribers.
 func PublishEvent(typ string, data map[string]any) {
-	defaultBroker.publish(Event{
+	e := Event{
 		Type: typ,
 		Data: data,
 		At:   time.Now().UTC().Format(time.RFC3339),
-	})
+	}
+	defaultBroker.publish(e)
+	appendEventLog(e)
 }
 
 // Server is a tiny HTTP server wired to the memory store.
@@ -121,15 +129,22 @@ func (s *Server) Serve(ctx context.Context, addr string) error {
 		WriteTimeout: 0, // SSE needs long-lived writes
 		IdleTimeout:  60 * time.Second,
 	}
+	// Start the event-log tailer so SSE subscribers see events produced
+	// by other processes (MCP server, hooks).
+	stop := make(chan struct{})
+	go s.tailEventLog(stop)
+
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.ListenAndServe() }()
 	select {
 	case <-ctx.Done():
+		close(stop)
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 		_ = srv.Shutdown(shutdownCtx)
 		return nil
 	case err := <-errCh:
+		close(stop)
 		if err == http.ErrServerClosed {
 			return nil
 		}
@@ -173,6 +188,9 @@ func (s *Server) handleFeatures(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 500)
 		return
 	}
+	if features == nil {
+		features = []memory.Feature{}
+	}
 	writeJSON(w, features)
 }
 
@@ -199,6 +217,9 @@ func (s *Server) handleMemories(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 500)
 		return
 	}
+	if notes == nil {
+		notes = []memory.Note{}
+	}
 	writeJSON(w, notes)
 }
 
@@ -213,7 +234,7 @@ func (s *Server) handleCommits(w http.ResponseWriter, r *http.Request) {
 	type commit struct {
 		Hash, Message, Author, IntentType, CommittedAt string
 	}
-	var out []commit
+	out := []commit{}
 	for rows.Next() {
 		var c commit
 		if err := rows.Scan(&c.Hash, &c.Message, &c.Author, &c.IntentType, &c.CommittedAt); err != nil {
@@ -252,7 +273,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	type hit struct {
 		ID, FeatureID, Content, Type, CreatedAt string
 	}
-	var out []hit
+	out := []hit{}
 	for rows.Next() {
 		var h hit
 		if err := rows.Scan(&h.ID, &h.FeatureID, &h.Content, &h.Type, &h.CreatedAt); err != nil {
