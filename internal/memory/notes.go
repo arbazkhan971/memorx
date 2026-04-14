@@ -25,6 +25,12 @@ func (s *Store) CreateNote(featureID, sessionID, content, noteType string) (*Not
 	if noteType == "" {
 		noteType = "note"
 	}
+	// Strip <private>...</private> blocks at the store boundary so every
+	// capture path (hooks, MCP, import) gets the same privacy guarantee.
+	content = StripPrivate(content)
+	if content == "" {
+		return nil, fmt.Errorf("note empty after privacy stripping")
+	}
 	id, now := uuid.New().String(), time.Now().UTC().Format(time.DateTime)
 	w := s.db.Writer()
 	if _, err := w.Exec(`INSERT INTO notes (id, feature_id, session_id, content, type, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`, id, featureID, nullIfEmpty(sessionID), content, noteType, now, now); err != nil {

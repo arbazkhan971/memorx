@@ -1,0 +1,333 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>memorX dashboard</title>
+  <style>
+    :root {
+      --bg: #0b0d10;
+      --panel: #141820;
+      --border: #222932;
+      --text: #e6edf3;
+      --dim: #7d8590;
+      --accent: #58a6ff;
+      --green: #3fb950;
+      --yellow: #d29922;
+      --red: #f85149;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      font-size: 14px;
+    }
+    header {
+      padding: 16px 24px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    header h1 { margin: 0; font-size: 18px; font-weight: 600; }
+    header .sub { color: var(--dim); font-size: 12px; }
+    header .status { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+    header .dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--green);
+      box-shadow: 0 0 8px var(--green);
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 16px;
+      padding: 16px 24px;
+    }
+    @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px;
+      overflow: hidden;
+    }
+    .card h2 {
+      margin: 0 0 12px 0;
+      font-size: 12px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--dim);
+    }
+    .big {
+      font-size: 28px;
+      font-weight: 600;
+    }
+    .stats { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
+    .stats .stat { text-align: center; }
+    .stats .stat .label { color: var(--dim); font-size: 11px; text-transform: uppercase; }
+    .feature-active {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      margin-bottom: 4px;
+    }
+    .feature-active .name { font-size: 18px; font-weight: 600; color: var(--accent); }
+    .feature-active .branch {
+      font-size: 11px; color: var(--dim);
+      padding: 2px 6px; border: 1px solid var(--border); border-radius: 4px;
+    }
+    .plan-bar {
+      height: 6px; background: var(--border); border-radius: 3px;
+      overflow: hidden; margin-top: 8px;
+    }
+    .plan-bar .fill { height: 100%; background: var(--green); }
+    .list { list-style: none; padding: 0; margin: 0; }
+    .list li {
+      padding: 8px 0;
+      border-bottom: 1px solid var(--border);
+      font-size: 13px;
+      line-height: 1.4;
+    }
+    .list li:last-child { border-bottom: none; }
+    .list .meta { color: var(--dim); font-size: 11px; }
+    .tag {
+      display: inline-block;
+      padding: 1px 6px;
+      border-radius: 3px;
+      font-size: 10px;
+      text-transform: uppercase;
+      margin-right: 6px;
+    }
+    .tag-decision { background: #1f6feb33; color: var(--accent); }
+    .tag-observation { background: #30363d; color: var(--dim); }
+    .tag-blocker { background: #f8514933; color: var(--red); }
+    .tag-note { background: #d2992233; color: var(--yellow); }
+    .tag-feat { background: #3fb95033; color: var(--green); }
+    .tag-fix { background: #f8514933; color: var(--red); }
+    .tag-refactor { background: #58a6ff33; color: var(--accent); }
+    .event-stream {
+      font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+      font-size: 12px;
+      max-height: 300px;
+      overflow-y: auto;
+    }
+    .event-stream .ev {
+      padding: 4px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .event-stream .ev:last-child { border-bottom: none; }
+    .search {
+      width: 100%;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 8px;
+      border-radius: 6px;
+      font-size: 13px;
+      font-family: inherit;
+    }
+    .search:focus { outline: none; border-color: var(--accent); }
+    .wide { grid-column: span 3; }
+    @media (max-width: 900px) { .wide { grid-column: span 1; } }
+    .empty { color: var(--dim); font-style: italic; padding: 16px 0; text-align: center; }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>memorX</h1>
+      <div class="sub" id="git-root">—</div>
+    </div>
+    <div class="status">
+      <div class="dot" id="live-dot"></div>
+      <span id="live-label">live</span>
+    </div>
+  </header>
+
+  <div class="grid">
+    <div class="card">
+      <h2>Active feature</h2>
+      <div id="active-feature" class="empty">none</div>
+      <div id="plan" style="margin-top: 12px;"></div>
+    </div>
+
+    <div class="card">
+      <h2>Memory stats</h2>
+      <div class="stats" id="stats">
+        <div class="stat"><div class="big" id="n-features">0</div><div class="label">features</div></div>
+        <div class="stat"><div class="big" id="n-notes">0</div><div class="label">notes</div></div>
+        <div class="stat"><div class="big" id="n-facts">0</div><div class="label">facts</div></div>
+        <div class="stat"><div class="big" id="n-commits">0</div><div class="label">commits</div></div>
+        <div class="stat"><div class="big" id="n-sessions">0</div><div class="label">sessions</div></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Live stream</h2>
+      <div class="event-stream" id="events"><div class="empty">waiting for events…</div></div>
+    </div>
+
+    <div class="card">
+      <h2>Recent memories</h2>
+      <ul class="list" id="memories"><li class="empty">no memories yet</li></ul>
+    </div>
+
+    <div class="card">
+      <h2>Recent commits</h2>
+      <ul class="list" id="commits"><li class="empty">no commits yet</li></ul>
+    </div>
+
+    <div class="card">
+      <h2>Search</h2>
+      <input class="search" id="search" placeholder="search notes, decisions, facts…" />
+      <ul class="list" id="search-results"></ul>
+    </div>
+  </div>
+
+  <script>
+    const $ = id => document.getElementById(id);
+    const tagClass = t => ({
+      decision: "tag tag-decision",
+      observation: "tag tag-observation",
+      blocker: "tag tag-blocker",
+      note: "tag tag-note",
+      feat: "tag tag-feat",
+      fix: "tag tag-fix",
+      refactor: "tag tag-refactor",
+    }[t] || "tag tag-note");
+
+    async function fetchJSON(path) {
+      const r = await fetch(path);
+      if (!r.ok) throw new Error(r.status);
+      return r.json();
+    }
+
+    function renderActiveFeature(st) {
+      const el = $("active-feature");
+      if (!st.active_feature) { el.innerHTML = '<div class="empty">no active feature</div>'; return; }
+      const f = st.active_feature;
+      let html = `<div class="feature-active">
+          <div class="name">${escapeHTML(f.Name)}</div>
+          ${f.Branch ? `<div class="branch">${escapeHTML(f.Branch)}</div>` : ""}
+        </div>
+        <div class="meta">${escapeHTML(f.Description || "")}</div>`;
+      el.innerHTML = html;
+
+      const plan = $("plan");
+      if (st.plan && st.plan.Title) {
+        const pct = st.plan.TotalSteps ? Math.round(100 * st.plan.CompletedStep / st.plan.TotalSteps) : 0;
+        plan.innerHTML = `
+          <div style="font-size:12px;color:var(--dim);">Plan: ${escapeHTML(st.plan.Title)} (${st.plan.CompletedStep}/${st.plan.TotalSteps})</div>
+          <div class="plan-bar"><div class="fill" style="width:${pct}%"></div></div>`;
+      } else {
+        plan.innerHTML = "";
+      }
+    }
+
+    function renderStats(c) {
+      $("n-features").textContent = c.features ?? 0;
+      $("n-notes").textContent = c.notes ?? 0;
+      $("n-facts").textContent = c.facts ?? 0;
+      $("n-commits").textContent = c.commits ?? 0;
+      $("n-sessions").textContent = c.sessions ?? 0;
+    }
+
+    function renderMemories(notes) {
+      const el = $("memories");
+      if (!notes || !notes.length) { el.innerHTML = '<li class="empty">no memories yet</li>'; return; }
+      el.innerHTML = notes.slice(0, 15).map(n => `
+        <li>
+          <span class="${tagClass(n.Type)}">${n.Type}</span>
+          ${escapeHTML(n.Content)}
+          <div class="meta">${escapeHTML(n.CreatedAt)}</div>
+        </li>`).join("");
+    }
+
+    function renderCommits(cs) {
+      const el = $("commits");
+      if (!cs || !cs.length) { el.innerHTML = '<li class="empty">no commits yet</li>'; return; }
+      el.innerHTML = cs.slice(0, 15).map(c => `
+        <li>
+          <span class="${tagClass(c.IntentType)}">${c.IntentType || "?"}</span>
+          ${escapeHTML(c.Message)}
+          <div class="meta">${escapeHTML((c.Hash || "").slice(0, 7))} · ${escapeHTML(c.Author)} · ${escapeHTML(c.CommittedAt)}</div>
+        </li>`).join("");
+    }
+
+    function escapeHTML(s) {
+      if (s == null) return "";
+      return String(s).replace(/[&<>"']/g, c => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+      }[c]));
+    }
+
+    async function refresh() {
+      try {
+        const [st, mem, commits] = await Promise.all([
+          fetchJSON("/api/status"),
+          fetchJSON("/api/memories?limit=20"),
+          fetchJSON("/api/commits?limit=20"),
+        ]);
+        $("git-root").textContent = st.git_root || "";
+        renderActiveFeature(st);
+        renderStats(st.counts || {});
+        renderMemories(mem);
+        renderCommits(commits);
+      } catch (e) {
+        console.error("refresh failed", e);
+      }
+    }
+
+    $("search").addEventListener("input", async e => {
+      const q = e.target.value.trim();
+      const el = $("search-results");
+      if (!q) { el.innerHTML = ""; return; }
+      try {
+        const hits = await fetchJSON("/api/search?q=" + encodeURIComponent(q));
+        if (!hits.length) { el.innerHTML = '<li class="empty">no matches</li>'; return; }
+        el.innerHTML = hits.map(h => `
+          <li>
+            <span class="${tagClass(h.Type)}">${h.Type}</span>
+            ${escapeHTML(h.Content)}
+            <div class="meta">${escapeHTML(h.CreatedAt)}</div>
+          </li>`).join("");
+      } catch (err) {
+        el.innerHTML = '<li class="empty">search error</li>';
+      }
+    });
+
+    // Live SSE
+    const ev = new EventSource("/api/events");
+    const streamEl = $("events");
+    let streamItems = [];
+    function appendEvent(type, data) {
+      const t = new Date().toLocaleTimeString();
+      streamItems.unshift(`<div class="ev">[${t}] <b>${escapeHTML(type)}</b> ${escapeHTML(JSON.stringify(data))}</div>`);
+      streamItems = streamItems.slice(0, 50);
+      streamEl.innerHTML = streamItems.join("") || '<div class="empty">waiting for events…</div>';
+    }
+    ["observation", "session_start", "session_end", "commits_synced", "remember", "plan_update"].forEach(t => {
+      ev.addEventListener(t, e => {
+        try { appendEvent(t, JSON.parse(e.data).data); } catch {}
+        refresh();
+      });
+    });
+    ev.onerror = () => {
+      $("live-dot").style.background = "var(--red)";
+      $("live-dot").style.boxShadow = "0 0 8px var(--red)";
+      $("live-label").textContent = "disconnected";
+    };
+    ev.onopen = () => {
+      $("live-dot").style.background = "var(--green)";
+      $("live-dot").style.boxShadow = "0 0 8px var(--green)";
+      $("live-label").textContent = "live";
+    };
+
+    refresh();
+    setInterval(refresh, 10000);
+  </script>
+</body>
+</html>

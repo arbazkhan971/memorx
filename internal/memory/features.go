@@ -17,6 +17,10 @@ type Store struct{ db *storage.DB }
 
 func NewStore(db *storage.DB) *Store { return &Store{db: db} }
 
+// DB exposes the underlying storage handle. Used by hooks and dashboard
+// helpers that need to reuse the same writer/reader connection pool.
+func (s *Store) DB() *storage.DB { return s.db }
+
 const featureCols = `id, name, description, status, COALESCE(branch, ''), created_at, last_active`
 const sessionCols = `id, feature_id, tool, started_at, COALESCE(ended_at, ''), COALESCE(summary, '')`
 
